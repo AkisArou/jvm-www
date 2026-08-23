@@ -4,9 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$(mktemp -d)"
 CORE_OUT="$OUT/core"
+WEB_EVENTS_OUT="$OUT/web-events"
 ANDROID_OUT="$OUT/android"
 trap 'rm -rf "$OUT"' EXIT
-mkdir -p "$CORE_OUT" "$ANDROID_OUT"
+mkdir -p "$CORE_OUT" "$WEB_EVENTS_OUT" "$ANDROID_OUT"
 
 mapfile -d '' CORE_SOURCES < <(
   find \
@@ -23,6 +24,18 @@ java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.AsyncFrameConformance
 java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.TimerConformance
 java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.IntervalConformance
 java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.PlatformPromiseConformance
+
+mapfile -d '' WEB_EVENTS_SOURCES < <(
+  find \
+    "$ROOT/web-events/src/main/java" \
+    "$ROOT/web-events-testkit/src/main/java" \
+    -name '*.java' -print0 | sort -z
+)
+
+javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
+  -cp "$CORE_OUT" -d "$WEB_EVENTS_OUT" "${WEB_EVENTS_SOURCES[@]}"
+java -cp "$CORE_OUT:$WEB_EVENTS_OUT" \
+  io.github.akisarou.jvmwww.web.events.testkit.WebEventsConformance
 
 mapfile -d '' ANDROID_SOURCES < <(
   find \
@@ -109,6 +122,66 @@ if grep -Eq \
     'java/util/concurrent/atomic/AtomicInteger([^A-Za-z]|$)|AtomicIntegerFieldUpdater|AtomicReferenceFieldUpdater' \
     <<<"$(javap -classpath "$CORE_OUT" -verbose io.github.akisarou.jvmwww.runtime.PlatformPromise)"; then
   printf 'PlatformPromise must not allocate an atomic holder or depend on reflective field updaters\n' >&2
+  exit 1
+fi
+
+abort_signal_shape="$(
+  javap -classpath "$CORE_OUT:$WEB_EVENTS_OUT" -p \
+    io.github.akisarou.jvmwww.web.events.AbortSignal
+)"
+if [[ "$abort_signal_shape" != *"extends io.github.akisarou.jvmwww.web.events.EventTarget"* ]] || \
+   [[ "$abort_signal_shape" != *"implements io.github.akisarou.jvmwww.runtime.RuntimeTask,io.github.akisarou.jvmwww.web.events.EventListener"* ]] || \
+   [[ "$abort_signal_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'AbortSignal must be its EventTarget, timeout RuntimeTask, and onabort listener, never a Runnable\n' >&2
+  exit 1
+fi
+if compgen -G \
+     "$WEB_EVENTS_OUT/io/github/akisarou/jvmwww/web/events/AbortSignal\$*.class" \
+     >/dev/null; then
+  printf 'AbortSignal must not allocate timeout or onabort inner wrappers\n' >&2
+  exit 1
+fi
+
+listener_entry_shape="$(
+  javap -classpath "$CORE_OUT:$WEB_EVENTS_OUT" -p \
+    'io.github.akisarou.jvmwww.web.events.EventTarget$ListenerEntry'
+)"
+if [[ "$listener_entry_shape" != *"implements io.github.akisarou.jvmwww.web.events.AbortAlgorithm"* ]] || \
+   [[ "$listener_entry_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'ListenerEntry must be its signal-removal AbortAlgorithm, never a Runnable\n' >&2
+  exit 1
+fi
+
+event_target_verbose="$(
+  javap -classpath "$CORE_OUT:$WEB_EVENTS_OUT" -verbose \
+    io.github.akisarou.jvmwww.web.events.EventTarget
+)"
+if grep -Eq 'java/util/(ArrayList|concurrent/CopyOnWriteArrayList)|\.toArray:' \
+    <<<"$event_target_verbose"; then
+  printf 'EventTarget dispatch must use the intrusive list and sequence cutoff, not a snapshot collection\n' >&2
+  exit 1
+fi
+
+web_events_verbose="$(
+  javap -classpath "$CORE_OUT:$WEB_EVENTS_OUT" -verbose \
+    io.github.akisarou.jvmwww.web.events.EventTarget \
+    io.github.akisarou.jvmwww.web.events.AbortSignal \
+    io.github.akisarou.jvmwww.web.events.AbortSignalDependency \
+    io.github.akisarou.jvmwww.web.events.AbortController
+)"
+for required in \
+  'java/lang/ref/WeakReference' \
+  'io/github/akisarou/jvmwww/runtime/RuntimeInstance.setTimeout' \
+  'io/github/akisarou/jvmwww/runtime/RuntimeInstance.admitHostTask'; do
+  if [[ "$web_events_verbose" != *"$required"* ]]; then
+    printf 'web-events is missing required owner/retention primitive: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+if grep -Eq \
+    'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ScheduledThreadPoolExecutor|CopyOnWriteArrayList|android/os/Handler|java/lang/Runnable' \
+    <<<"$web_events_verbose"; then
+  printf 'web-events must not add a future, coroutine, Android scheduler, or callback Runnable\n' >&2
   exit 1
 fi
 
