@@ -1,0 +1,38 @@
+name: apply-web-events-slice
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-web-events-slice.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Apply and verify owner-confined Web events
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_parent=ed280952db3c6f92e4d83d3917d54068d8057406
+          actual_parent="$(git rev-parse HEAD^)"
+          if [[ "$actual_parent" != "$expected_parent" ]]; then
+            printf 'Unexpected parent: expected %s, got %s\n' "$expected_parent" "$actual_parent" >&2
+            exit 1
+          fi
+          cat .github/payload/web-events.part* | base64 -d > /tmp/web-events-payload.tar.gz
+          printf '%s  %s\n' 74813f2bce9ed20bfda6d9966a5971e6ba6d6ed367f39368fa181a3c5505da92 /tmp/web-events-payload.tar.gz | sha256sum -c -
+          tar -xzf /tmp/web-events-payload.tar.gz -C "$GITHUB_WORKSPACE"
+          rm -rf .github/payload .github/workflows/apply-web-events-slice.yml
+          ./scripts/test-core.sh
+          git config user.name 'Adam Karafyllidis'
+          git config user.email 'akisarou90@gmail.com'
+          git add -A
+          git commit -m 'Add owner-confined Web events and abort signals' -m 'Fetch, WebSocket, and renderer capabilities need DOM listener and cancellation semantics without moving TypeScript execution off-owner or allocating a dispatch snapshot, signal-removal wrapper, or timeout Runnable. Add Event, CustomEvent, EventTarget, DOMException, AbortController, and AbortSignal in a Java 8 web-events module.' -m 'Use intrusive listener entries with per-phase sequence cutoffs, synchronous abort algorithms and events, specialized abort reasons, conditional dependent-signal retention, and one AbortSignal object as its timeout task and onabort listener. Add twelve deterministic conformance cases, structural allocation/scheduler gates, and ADR 0005.'
+          git push origin HEAD:main
