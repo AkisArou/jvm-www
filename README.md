@@ -8,7 +8,7 @@ The project exists to support TypeScript compiled to Java/DEX and executed by AR
 
 `jvm-www` is split along semantic boundaries rather than copying React Native as one monolithic runtime:
 
-- **runtime core** — owner-confined turns, microtasks, promises, rejection tracking, and compiler-facing continuation support;
+- **runtime core** — owner-confined turns, microtasks, promises, rejection tracking, timers, and compiler-facing continuation support;
 - **Android host adapter** — `Looper`/`Handler` ownership, monotonic timers, lifecycle, and foreign-thread admission;
 - **Web capabilities** — `AbortController`, `console`, Fetch, WebSocket, encoding, URL, blobs, and related APIs;
 - **conformance** — exact observable traces compared with the existing ScriptC C/LLVM backends and reference JavaScript engines.
@@ -17,7 +17,7 @@ React Native is useful as an API inventory and integration reference. ECMAScript
 
 ## Current slice
 
-The current implementation provides a pure-Java `RuntimeInstance`, Promise core, and compiler-facing async-frame ABI with:
+The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, and one-shot logical timers with:
 
 - explicit allocation-free outer host-turn entry/exit calls for generated code;
 - one owner thread per runtime instance;
@@ -31,9 +31,12 @@ The current implementation provides a pure-Java `RuntimeInstance`, Promise core,
 - checkpoint-based unhandled and later-handled rejection tracking;
 - an `AsyncFrame` whose result Promise, live continuation fields, and resume microtask are one object;
 - wrapper-free sequential awaits and wrapper-free async result adoption;
-- deterministic Java conformance tests plus an executable Node ordering reference.
+- a per-runtime deadline/sequence heap for `setTimeout` and `clearTimeout`;
+- exact clamp-and-truncate delay coercion, generation-safe 53-bit handles, and eager cancellation;
+- one reusable platform timer alarm with a full microtask checkpoint between timer callbacks;
+- deterministic Java conformance tests plus executable Node ordering references.
 
-End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, timers, and Web capabilities remain separate incremental slices.
+End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, intervals, the Android `Handler` adapter, and Web capabilities remain separate incremental slices.
 
 ## Run the core conformance tests
 
@@ -54,4 +57,4 @@ The intended default is a mobile Web profile:
 - Node-only ordering such as `process.nextTick` is excluded unless an explicit Node-compatibility profile is selected;
 - unsupported shapes fail precisely rather than being silently approximated.
 
-See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), and the [`Web/API inventory`](docs/web-api-inventory.md).
+See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), and the [`Web/API inventory`](docs/web-api-inventory.md).

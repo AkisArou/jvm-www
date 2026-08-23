@@ -29,6 +29,7 @@ public final class RuntimeInstance implements AutoCloseable {
     private final RuntimeErrorReporter errorReporter;
     private final PromiseRejectionTracker rejectionTracker;
     private final int hostTasksPerWake;
+    private final TimerHost timerHost;
 
     /** Owner-thread-only queues. */
     private final ArrayDeque<RuntimeTask> microtasks = new ArrayDeque<RuntimeTask>();
@@ -61,6 +62,7 @@ public final class RuntimeInstance implements AutoCloseable {
     /** Owner-thread-only state. */
     private int hostTurnDepth;
     private boolean drainingMicrotasks;
+    private RuntimeTimerQueue timerQueue;
     private volatile boolean closed;
 
     public RuntimeInstance(OwnerExecutor ownerExecutor, RuntimeErrorReporter errorReporter) {
@@ -68,21 +70,44 @@ public final class RuntimeInstance implements AutoCloseable {
                 ownerExecutor,
                 errorReporter,
                 PromiseRejectionTracker.NONE,
-                DEFAULT_HOST_TASKS_PER_WAKE);
+                DEFAULT_HOST_TASKS_PER_WAKE,
+                TimerHost.UNSUPPORTED);
     }
 
     public RuntimeInstance(
             OwnerExecutor ownerExecutor,
             RuntimeErrorReporter errorReporter,
             int hostTasksPerWake) {
-        this(ownerExecutor, errorReporter, PromiseRejectionTracker.NONE, hostTasksPerWake);
+        this(
+                ownerExecutor,
+                errorReporter,
+                PromiseRejectionTracker.NONE,
+                hostTasksPerWake,
+                TimerHost.UNSUPPORTED);
     }
 
     public RuntimeInstance(
             OwnerExecutor ownerExecutor,
             RuntimeErrorReporter errorReporter,
             PromiseRejectionTracker rejectionTracker) {
-        this(ownerExecutor, errorReporter, rejectionTracker, DEFAULT_HOST_TASKS_PER_WAKE);
+        this(
+                ownerExecutor,
+                errorReporter,
+                rejectionTracker,
+                DEFAULT_HOST_TASKS_PER_WAKE,
+                TimerHost.UNSUPPORTED);
+    }
+
+    public RuntimeInstance(
+            OwnerExecutor ownerExecutor,
+            RuntimeErrorReporter errorReporter,
+            TimerHost timerHost) {
+        this(
+                ownerExecutor,
+                errorReporter,
+                PromiseRejectionTracker.NONE,
+                DEFAULT_HOST_TASKS_PER_WAKE,
+                timerHost);
     }
 
     public RuntimeInstance(
@@ -90,9 +115,37 @@ public final class RuntimeInstance implements AutoCloseable {
             RuntimeErrorReporter errorReporter,
             PromiseRejectionTracker rejectionTracker,
             int hostTasksPerWake) {
+        this(
+                ownerExecutor,
+                errorReporter,
+                rejectionTracker,
+                hostTasksPerWake,
+                TimerHost.UNSUPPORTED);
+    }
+
+    public RuntimeInstance(
+            OwnerExecutor ownerExecutor,
+            RuntimeErrorReporter errorReporter,
+            PromiseRejectionTracker rejectionTracker,
+            TimerHost timerHost) {
+        this(
+                ownerExecutor,
+                errorReporter,
+                rejectionTracker,
+                DEFAULT_HOST_TASKS_PER_WAKE,
+                timerHost);
+    }
+
+    public RuntimeInstance(
+            OwnerExecutor ownerExecutor,
+            RuntimeErrorReporter errorReporter,
+            PromiseRejectionTracker rejectionTracker,
+            int hostTasksPerWake,
+            TimerHost timerHost) {
         this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
         this.errorReporter = Objects.requireNonNull(errorReporter, "errorReporter");
         this.rejectionTracker = Objects.requireNonNull(rejectionTracker, "rejectionTracker");
+        this.timerHost = Objects.requireNonNull(timerHost, "timerHost");
         if (hostTasksPerWake < 1) {
             throw new IllegalArgumentException("hostTasksPerWake must be at least 1");
         }
@@ -103,6 +156,23 @@ public final class RuntimeInstance implements AutoCloseable {
     public JsPromise newPromise() {
         assertLanguageExecution();
         return new JsPromise(this);
+    }
+
+    /** Registers one one-shot timer and returns an exactly representable JavaScript-number handle. */
+    public double setTimeout(RuntimeTask callback, double delayMilliseconds) {
+        assertLanguageExecution();
+        if (timerQueue == null) {
+            timerQueue = new RuntimeTimerQueue(this, timerHost, hostTasksPerWake);
+        }
+        return timerQueue.setTimeout(callback, delayMilliseconds);
+    }
+
+    /** Cancels a timer. Invalid, stale, already-fired, and fractional handles are harmless no-ops. */
+    public void clearTimeout(double handle) {
+        assertLanguageExecution();
+        if (timerQueue != null) {
+            timerQueue.clearTimeout(handle);
+        }
     }
 
     /** Begins a host entry turn on the owner thread. Calls may nest. */
@@ -215,6 +285,10 @@ public final class RuntimeInstance implements AutoCloseable {
         acceptingHostTasks.set(false);
         closed = true;
 
+        if (timerQueue != null) {
+            timerQueue.close();
+        }
+
         AdmittedTask admittedTask;
         while ((admittedTask = admittedHostTasks.poll()) != null) {
             discardTask(admittedTask.task);
@@ -275,7 +349,7 @@ public final class RuntimeInstance implements AutoCloseable {
         }
     }
 
-    private void executeHostTask(RuntimeTask task) {
+    void executeHostTask(RuntimeTask task) {
         enterHostTurn();
         try {
             task.execute(this);
@@ -367,7 +441,7 @@ public final class RuntimeInstance implements AutoCloseable {
         return !admittedHostTasks.isEmpty() || !microtasks.isEmpty();
     }
 
-    private void discardTask(RuntimeTask task) {
+    void discardTask(RuntimeTask task) {
         try {
             task.discard();
         } catch (Throwable error) {

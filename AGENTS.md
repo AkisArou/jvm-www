@@ -19,7 +19,7 @@
 - Promise reactions and `queueMicrotask` jobs are microtasks. Timers, Android callbacks, Fetch completions, and WebSocket messages are host tasks.
 - A complete microtask checkpoint runs after the outermost host turn and before the next host task.
 - Do not implement the language Promise with `CompletableFuture`, Kotlin coroutines, executor pools, or one `Runnable` per reaction.
-- Do not add a periodic event-loop or timer polling pump.
+- Logical timers use one per-runtime deadline heap and at most one armed platform callback. Do not add `ScheduledExecutorService`, one `Runnable` per timer, or a periodic timer pump.
 - Do not silently substitute Node ordering for the default Web Mobile profile.
 - Unsupported behavior fails with a stable diagnostic or explicit exception; it is never approximated silently.
 
@@ -31,6 +31,7 @@
 - Use one reusable owner wake callback per runtime instance.
 - Avoid primitive boxing where checked IR can select a specialized ABI.
 - Preserve the accepted fused async-frame ABI unless a new decision record supplies contrary allocation and lifetime evidence.
+- Timer slots and heap entries may be reused, but never at the cost of stale-handle safety or callback ordering.
 - Avoid base64 and repeated byte copies in binary transports unless a compatibility boundary requires them and a test records the cost.
 - Every optimization remains subordinate to observable ordering, cancellation, and error semantics.
 
@@ -45,6 +46,8 @@ Run before every runtime-core commit:
 Ordering changes require falsifying trace tests. Concurrency changes require a deterministic race test plus repeated stress runs. Later compiler integrations must also pass the Native TypeScript and ScriptC gates at their pinned checkpoints.
 
 ## Commit discipline
+
+All work is committed and pushed directly to `main`. Do not create topic or work branches in this repository. Multiple agents may advance `main`, so re-read its head immediately before creating a commit, build on that exact tree, use a non-forced fast-forward update, and rebase/reconstruct the commit if the head changed.
 
 Keep commits small and independently green. Commit messages should state the semantic or performance problem, why the chosen boundary owns it, and the evidence that falsifies likely incorrect alternatives.
 

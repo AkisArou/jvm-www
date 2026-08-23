@@ -16,6 +16,7 @@ javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror -d "$OUT" "
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.RuntimeInstanceConformance
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.PromiseConformance
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.AsyncFrameConformance
+java -cp "$OUT" io.github.akisarou.jvmwww.testkit.TimerConformance
 
 promise_job_shape="$(
   javap -classpath "$OUT" -p \
@@ -37,11 +38,21 @@ if [[ "$async_frame_shape" != *"extends io.github.akisarou.jvmwww.runtime.JsProm
   exit 1
 fi
 
+timer_entry_shape="$(
+  javap -classpath "$OUT" -p \
+    'io.github.akisarou.jvmwww.runtime.RuntimeTimerQueue$TimerEntry'
+)"
+if [[ "$timer_entry_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'Logical timer entries must not become one Runnable per timer\n' >&2
+  exit 1
+fi
+
 if javap -classpath "$OUT" -verbose \
      io.github.akisarou.jvmwww.runtime.JsPromise \
-     io.github.akisarou.jvmwww.runtime.AsyncFrame | \
-   grep -Eq 'CompletableFuture|kotlinx/coroutines'; then
-  printf 'Forbidden future/coroutine dependency in Promise or async-frame core\n' >&2
+     io.github.akisarou.jvmwww.runtime.AsyncFrame \
+     io.github.akisarou.jvmwww.runtime.RuntimeTimerQueue | \
+   grep -Eq 'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ScheduledThreadPoolExecutor|java/util/TimerTask|java/util/Timer'; then
+  printf 'Forbidden future/coroutine/platform-timer scheduler dependency in runtime-core\n' >&2
   exit 1
 fi
 
