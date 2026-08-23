@@ -20,6 +20,7 @@ jobs:
       - run: ./scripts/test-core.sh
       - run: ./scripts/test-encoding.sh
       - run: ./scripts/test-console.sh
+      - run: ./scripts/test-console-android.sh
       - run: ./scripts/test-fetch.sh
       - run: ./scripts/test-fetch-okhttp.sh
       - name: Publish connector-visible result
