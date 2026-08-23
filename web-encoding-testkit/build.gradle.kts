@@ -1,10 +1,10 @@
 plugins {
-    `java-library`
+    application
 }
 
 dependencies {
-    api(project(":runtime-core"))
-    api(project(":web-events"))
+    implementation(project(":runtime-core"))
+    implementation(project(":runtime-testkit"))
     implementation(project(":web-encoding"))
 }
 
@@ -18,4 +18,8 @@ tasks.withType<JavaCompile>().configureEach {
     options.release.set(8)
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-options", "-Werror"))
+}
+
+application {
+    mainClass.set("io.github.akisarou.jvmwww.web.encoding.testkit.EncodingConformance")
 }

@@ -4,7 +4,7 @@ import io.github.akisarou.jvmwww.runtime.JsPromise;
 import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.runtime.RuntimeTask;
-import java.nio.charset.StandardCharsets;
+import io.github.akisarou.jvmwww.web.encoding.TextDecoder;
 
 /** Buffered network Response for the current Fetch profile. */
 public final class Response {
@@ -48,7 +48,7 @@ public final class Response {
         return startBodyRead(BodyReadPromise.KIND_BYTES);
     }
 
-    /** Fetch text decoding is UTF-8 with replacement, represented by Java's UTF-8 decoder. */
+    /** Returns a Promise fulfilled through the selected WHATWG UTF-8 decoder. */
     public JsPromise text() {
         assertAccess();
         return startBodyRead(BodyReadPromise.KIND_TEXT);
@@ -96,7 +96,7 @@ public final class Response {
             if (kind == KIND_BYTES) {
                 fulfillReference(captured.clone());
             } else if (kind == KIND_TEXT) {
-                fulfillReference(new String(captured, StandardCharsets.UTF_8));
+                fulfillReference(new TextDecoder(runtime).decode(captured));
             } else {
                 throw new AssertionError("Unknown response body read kind: " + kind);
             }

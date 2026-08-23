@@ -10,7 +10,7 @@ The project exists to support TypeScript compiled to Java/DEX and executed by AR
 
 - **runtime core** — owner-confined turns, microtasks, promises, rejection tracking, timers, platform-completion adapters, and compiler-facing continuation support;
 - **Android host adapter** — `Looper`/`Handler` ownership, monotonic deadline arming, lifecycle integration, and foreign-thread admission;
-- **Web capabilities** — events, cancellation, Fetch, encoding, URL, blobs, WebSocket, console, and related APIs;
+- **Web capabilities** — events, cancellation, encoding, Fetch, URL, blobs, WebSocket, console, and related APIs;
 - **transport adapters** — replaceable platform plumbing such as OkHttp that publishes transport-safe snapshots but owns no JavaScript scheduling semantics;
 - **conformance** — exact observable traces compared with the existing ScriptC C/LLVM backends and reference JavaScript engines.
 
@@ -18,7 +18,7 @@ React Native is useful as an API inventory and integration reference. ECMAScript
 
 ## Current slice
 
-The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, logical timeout/interval timers, Android Handler host, platform Promise adapter, owner-confined events and abort signals, a buffered transport-independent Fetch core, and an OkHttp Fetch transport with:
+The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, logical timeout/interval timers, Android Handler host, platform Promise adapter, owner-confined events and abort signals, exact UTF-8 Encoding API objects, a buffered transport-independent Fetch core, and an OkHttp Fetch transport with:
 
 - explicit allocation-free outer host-turn entry/exit calls for generated code;
 - one owner thread per runtime instance;
@@ -43,15 +43,19 @@ The current implementation provides a pure-Java `RuntimeInstance`, Promise core,
 - a `PlatformPromise` that is simultaneously the returned `JsPromise`, first-completion token, and admitted `RuntimeTask`;
 - exact reference disposal when a completion loses, owner settlement wins, admission fails, or runtime shutdown races delivery;
 - owner-confined `EventTarget`, `Event`, `CustomEvent`, `AbortController`, and `AbortSignal` semantics;
+- `TextEncoder` with exact scalar conversion, U+FFFD lone-surrogate replacement, and no-partial-scalar `encodeInto`;
+- a streaming `TextDecoder` with WHATWG UTF-8 replacement boundaries, fatal errors, and BOM state;
+- explicit rejection of unreached legacy decoder labels instead of delegating them to JVM charset aliases;
 - a buffered Fetch profile with `Headers`, `Request`, `Response`, exact abort reasons, and one-shot body consumption;
+- Fetch text bodies decoded through the same Web Encoding implementation;
 - a `FetchOperation` fused across returned Promise, transport callback, abort algorithm, and admitted host task;
 - an OkHttp adapter whose bridge is both the OkHttp callback and Fetch cancellation handle;
 - complete response buffering and resource closure on the OkHttp callback thread before owner admission;
 - explicit application ownership of the supplied OkHttp `Call.Factory` and all client policy;
-- no per-operation `AtomicInteger`, Future, coroutine continuation, scheduler task, platform `Runnable`, or live OkHttp response crossing into language state;
+- no per-operation `AtomicInteger`, Future, coroutine continuation, scheduler task, platform `Runnable`, live OkHttp response, or JVM charset shortcut crossing into language semantics;
 - deterministic Java 8 conformance tests plus executable Node ordering references.
 
-End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, Android application packaging/lifecycle wiring, WHATWG URL parsing, streaming Fetch bodies, and the remaining Web capabilities are separate incremental slices.
+End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, Android application packaging/lifecycle wiring, legacy Web encodings, WHATWG URL parsing, streaming Fetch bodies, and the remaining Web capabilities are separate incremental slices.
 
 ## Android attachment
 
@@ -78,6 +82,25 @@ return pending;
 
 The platform callback only publishes a copied or retained payload. The owner ingress task performs the actual `JsPromise` settlement, and reactions then run as microtasks. A burst of completions shares the runtime's one coalesced Handler wake.
 
+## Web UTF-8 encoding
+
+Encoding objects belong to the runtime owner. The first decoder profile accepts the WHATWG UTF-8 labels and explicitly rejects unreached legacy encodings:
+
+```java
+runtime.enterHostTurn();
+try {
+    TextEncoder encoder = new TextEncoder(runtime);
+    byte[] bytes = encoder.encode("hello \ud83d\udca9");
+
+    TextDecoder decoder = new TextDecoder(runtime, "utf-8");
+    String text = decoder.decode(bytes);
+} finally {
+    runtime.leaveHostTurn();
+}
+```
+
+`TextDecoder.decode(input, true)` preserves a split UTF-8 sequence for the next call; `decode()` flushes it. The implementation owns malformed-sequence grouping and BOM behavior directly rather than inheriting them from `java.nio.charset`.
+
 ## Buffered Fetch over OkHttp
 
 The application supplies and owns its configured OkHttp client. The adapter maps Fetch transport snapshots to calls and buffers each completed body before publishing it to the runtime:
@@ -103,6 +126,7 @@ A JDK is the only requirement for the permanent gates. Android and OkHttp bounda
 
 ```sh
 ./scripts/test-core.sh
+./scripts/test-encoding.sh
 ./scripts/test-fetch.sh
 ./scripts/test-fetch-okhttp.sh
 ```
@@ -118,4 +142,4 @@ The intended default is a mobile Web profile:
 - Node-only ordering such as `process.nextTick` is excluded unless an explicit Node-compatibility profile is selected;
 - unsupported shapes fail precisely rather than being silently approximated.
 
-See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), [decision 0003](docs/decisions/0003-android-handler-runtime-host.md), [decision 0004](docs/decisions/0004-fused-platform-promise.md), [decision 0005](docs/decisions/0005-owner-confined-web-events-and-abort.md), [decision 0006](docs/decisions/0006-buffered-fetch-core.md), [decision 0007](docs/decisions/0007-buffered-okhttp-fetch-transport.md), and the [`Web/API inventory`](docs/web-api-inventory.md).
+See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), [decision 0003](docs/decisions/0003-android-handler-runtime-host.md), [decision 0004](docs/decisions/0004-fused-platform-promise.md), [decision 0005](docs/decisions/0005-owner-confined-web-events-and-abort.md), [decision 0006](docs/decisions/0006-buffered-fetch-core.md), [decision 0007](docs/decisions/0007-buffered-okhttp-fetch-transport.md), [decision 0008](docs/decisions/0008-exact-utf8-encoding-api.md), and the [`Web/API inventory`](docs/web-api-inventory.md).

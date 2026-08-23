@@ -4,8 +4,6 @@ plugins {
 
 dependencies {
     api(project(":runtime-core"))
-    api(project(":web-events"))
-    implementation(project(":web-encoding"))
 }
 
 java {

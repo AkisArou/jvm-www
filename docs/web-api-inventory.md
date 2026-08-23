@@ -61,11 +61,16 @@ Abort state is owner-confined for language observation. A transport receives a t
 
 ### Encoding
 
-- `TextEncoder` with UTF-8 `encode` and `encodeInto`;
-- `TextDecoder` with selected labels, fatal mode, BOM behavior, and streaming state;
-- optional `atob`/`btoa` compatibility helpers if selected.
+The implemented first slice provides:
 
-`TextEncoder` should use a dedicated Java implementation or compiler intrinsic. It must replace lone UTF-16 surrogates with U+FFFD and `encodeInto` must never write a partial encoded scalar. `String.getBytes(UTF_8)` alone is not sufficient evidence of Web-compatible behavior.
+- `TextEncoder` with UTF-8 `encode` and `encodeInto`;
+- exact conversion of lone UTF-16 surrogates to U+FFFD;
+- `TextDecoder` for the WHATWG UTF-8 labels with replacement/fatal modes, BOM handling, and streaming state;
+- one shared decoder implementation for direct API calls and `Response.text()`.
+
+`encodeInto` never writes a partial encoded scalar and reports `read` in UTF-16 code units. The implementation does not use `String.getBytes`, `new String(bytes, charset)`, or a retained `CharsetDecoder` as semantic substitutes.
+
+Legacy labels and encodings remain unreached. They fail with `JsRangeError` instead of being passed to Java charset aliases. Adding any legacy encoding requires the WHATWG label table, exact decoder/encoder indexes, malformed-input traces, and a separate decision record. Optional `atob`/`btoa` helpers are also separate profile choices.
 
 ### URL
 
@@ -82,7 +87,7 @@ Do not use `java.net.URL` or `java.net.URI` as the semantic implementation. They
 - redirects, credentials/cookies, compression, and caching only when the selected profile defines them;
 - streaming request/response bodies as a later explicit slice rather than a buffered API pretending to stream.
 
-The public objects and algorithms live in Java compatibility modules. Transport is an interface. Android's primary implementation should use OkHttp/Okio, while deterministic tests use a fake transport. Worker callbacks copy or retain a transport-safe result, admit one host task, and settle the Native TypeScript Promise on the owner.
+The public objects and algorithms live in Java compatibility modules. Transport is an interface. Android's primary implementation uses replaceable OkHttp plumbing, while deterministic tests use fake transports and API doubles. Worker callbacks copy or retain a transport-safe result, admit one host task, and settle the Native TypeScript Promise on the owner.
 
 CORS is a browser security policy and is not silently invented for native applications. A profile may add an explicit policy layer.
 
