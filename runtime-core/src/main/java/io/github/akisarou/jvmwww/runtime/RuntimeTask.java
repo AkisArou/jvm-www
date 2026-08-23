@@ -3,9 +3,10 @@ package io.github.akisarou.jvmwww.runtime;
 /**
  * A unit of work owned by one {@link RuntimeInstance}.
  *
- * <p>Promise reactions, compiler-generated continuations, logical timer callbacks, and copied
- * platform completion events can implement this interface directly. The runtime never creates one
- * Java {@link Runnable} per reaction or per logical timer.</p>
+ * <p>Promise reactions, compiler-generated continuations, logical timer callbacks, copied platform
+ * events, and {@link PlatformPromise} completion tokens can implement this interface directly. The
+ * runtime never creates one Java {@link Runnable} per reaction, logical timer, or platform
+ * completion.</p>
  */
 public interface RuntimeTask {
     /** Executes on the runtime owner thread. */

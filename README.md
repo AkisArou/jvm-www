@@ -8,7 +8,7 @@ The project exists to support TypeScript compiled to Java/DEX and executed by AR
 
 `jvm-www` is split along semantic boundaries rather than copying React Native as one monolithic runtime:
 
-- **runtime core** — owner-confined turns, microtasks, promises, rejection tracking, timers, and compiler-facing continuation support;
+- **runtime core** — owner-confined turns, microtasks, promises, rejection tracking, timers, platform-completion adapters, and compiler-facing continuation support;
 - **Android host adapter** — `Looper`/`Handler` ownership, monotonic deadline arming, lifecycle integration, and foreign-thread admission;
 - **Web capabilities** — `AbortController`, `console`, Fetch, WebSocket, encoding, URL, blobs, and related APIs;
 - **conformance** — exact observable traces compared with the existing ScriptC C/LLVM backends and reference JavaScript engines.
@@ -17,7 +17,7 @@ React Native is useful as an API inventory and integration reference. ECMAScript
 
 ## Current slice
 
-The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, logical timeout/interval timers, and the first Android Handler host with:
+The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, logical timeout/interval timers, Android Handler host, and platform Promise adapter with:
 
 - explicit allocation-free outer host-turn entry/exit calls for generated code;
 - one owner thread per runtime instance;
@@ -39,10 +39,13 @@ The current implementation provides a pure-Java `RuntimeInstance`, Promise core,
 - one `HandlerRuntimeHost` that is both `OwnerExecutor` and `TimerHost`;
 - direct `Handler.post` owner wakes and absolute `Handler.postAtTime` timer alarms;
 - the exact `SystemClock.uptimeMillis` time base with upward deadline rounding;
-- no adapter-owned callback wrapper, worker scheduler, or private Android polling loop;
+- a `PlatformPromise` that is simultaneously the returned `JsPromise`, first-completion token, and admitted `RuntimeTask`;
+- unboxed foreign fulfillment and rejection methods for void, number, boolean, and reference payloads;
+- exact reference disposal when a completion loses, owner settlement wins, admission fails, or runtime shutdown races delivery;
+- no per-operation `AtomicInteger`, completion wrapper, executor future, coroutine continuation, or platform `Runnable`;
 - deterministic Java 8 conformance tests plus executable Node ordering references.
 
-End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, Android application packaging/lifecycle wiring, and Web capabilities remain separate incremental slices.
+End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, Android application packaging/lifecycle wiring, and reached Web capabilities remain separate incremental slices.
 
 ## Android attachment
 
@@ -54,6 +57,20 @@ RuntimeInstance runtime = new RuntimeInstance(host, errorReporter, host);
 ```
 
 The application must close the runtime on that Looper before releasing its component. JavaScript timer semantics remain in `runtime-core`; the Android module only posts the reusable owner wake and the one earliest-deadline alarm.
+
+## Platform Promise completion
+
+Create the pending Promise during an active owner turn, return that same object to generated code, and retain it in the platform callback:
+
+```java
+PlatformPromise pending = runtime.newPlatformPromise();
+transport.start(
+        value -> pending.tryFulfillReference(value, responseDisposer),
+        error -> pending.tryRejectReference(error));
+return pending;
+```
+
+The platform callback only publishes a copied or retained payload. The owner ingress task performs the actual `JsPromise` settlement, and reactions then run as microtasks. A burst of completions shares the runtime's one coalesced Handler wake.
 
 ## Run the runtime conformance tests
 
@@ -74,4 +91,4 @@ The intended default is a mobile Web profile:
 - Node-only ordering such as `process.nextTick` is excluded unless an explicit Node-compatibility profile is selected;
 - unsupported shapes fail precisely rather than being silently approximated.
 
-See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), [decision 0003](docs/decisions/0003-android-handler-runtime-host.md), and the [`Web/API inventory`](docs/web-api-inventory.md).
+See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), [decision 0003](docs/decisions/0003-android-handler-runtime-host.md), [decision 0004](docs/decisions/0004-fused-platform-promise.md), and the [`Web/API inventory`](docs/web-api-inventory.md).

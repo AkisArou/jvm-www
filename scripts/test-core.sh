@@ -22,6 +22,7 @@ java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.PromiseConformance
 java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.AsyncFrameConformance
 java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.TimerConformance
 java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.IntervalConformance
+java -cp "$CORE_OUT" io.github.akisarou.jvmwww.testkit.PlatformPromiseConformance
 
 mapfile -d '' ANDROID_SOURCES < <(
   find \
@@ -57,6 +58,21 @@ if [[ "$async_frame_shape" != *"extends io.github.akisarou.jvmwww.runtime.JsProm
   exit 1
 fi
 
+platform_promise_shape="$(
+  javap -classpath "$CORE_OUT" -p io.github.akisarou.jvmwww.runtime.PlatformPromise
+)"
+if [[ "$platform_promise_shape" != *"extends io.github.akisarou.jvmwww.runtime.JsPromise implements io.github.akisarou.jvmwww.runtime.RuntimeTask"* ]] || \
+   [[ "$platform_promise_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'PlatformPromise must be the returned Promise and admitted RuntimeTask, never a Runnable\n' >&2
+  exit 1
+fi
+if compgen -G \
+     "$CORE_OUT/io/github/akisarou/jvmwww/runtime/PlatformPromise\$*.class" \
+     >/dev/null; then
+  printf 'PlatformPromise must not allocate adapter-specific inner completion wrappers\n' >&2
+  exit 1
+fi
+
 timer_queue_shape="$(
   javap -classpath "$CORE_OUT" -p io.github.akisarou.jvmwww.runtime.RuntimeTimerQueue
 )"
@@ -76,12 +92,23 @@ if [[ "$timer_entry_shape" == *"java.lang.Runnable"* ]]; then
   exit 1
 fi
 
-if javap -classpath "$CORE_OUT" -verbose \
-     io.github.akisarou.jvmwww.runtime.JsPromise \
-     io.github.akisarou.jvmwww.runtime.AsyncFrame \
-     io.github.akisarou.jvmwww.runtime.RuntimeTimerQueue | \
-   grep -Eq 'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ScheduledThreadPoolExecutor|java/util/TimerTask|java/util/Timer'; then
+core_verbose="$(
+  javap -classpath "$CORE_OUT" -verbose \
+    io.github.akisarou.jvmwww.runtime.JsPromise \
+    io.github.akisarou.jvmwww.runtime.AsyncFrame \
+    io.github.akisarou.jvmwww.runtime.PlatformPromise \
+    io.github.akisarou.jvmwww.runtime.RuntimeTimerQueue
+)"
+if grep -Eq \
+    'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ScheduledThreadPoolExecutor|java/util/TimerTask|java/util/Timer' \
+    <<<"$core_verbose"; then
   printf 'Forbidden future/coroutine/platform-timer scheduler dependency in runtime-core\n' >&2
+  exit 1
+fi
+if grep -Eq \
+    'java/util/concurrent/atomic/AtomicInteger([^A-Za-z]|$)|AtomicIntegerFieldUpdater|AtomicReferenceFieldUpdater' \
+    <<<"$(javap -classpath "$CORE_OUT" -verbose io.github.akisarou.jvmwww.runtime.PlatformPromise)"; then
+  printf 'PlatformPromise must not allocate an atomic holder or depend on reflective field updaters\n' >&2
   exit 1
 fi
 

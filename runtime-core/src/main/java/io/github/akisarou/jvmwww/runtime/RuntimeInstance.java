@@ -158,6 +158,18 @@ public final class RuntimeInstance implements AutoCloseable {
         return new JsPromise(this);
     }
 
+    /**
+     * Allocates a pending Promise that is also its foreign completion token and admitted host task.
+     *
+     * <p>Capability providers return the same object as a {@link JsPromise} and retain it in their
+     * platform callback. Completion methods are thread-safe and always settle on this runtime's
+     * owner through the foreign ingress queue.</p>
+     */
+    public PlatformPromise newPlatformPromise() {
+        assertLanguageExecution();
+        return new PlatformPromise(this);
+    }
+
     /** Registers a one-shot timer and returns an exactly representable number handle. */
     public double setTimeout(RuntimeTask callback, double delayMilliseconds) {
         assertLanguageExecution();
@@ -264,8 +276,25 @@ public final class RuntimeInstance implements AutoCloseable {
         }
 
         publishWakeWork();
-        requestOwnerWake();
+        try {
+            requestOwnerWake();
+        } catch (RuntimeException error) {
+            discardFailedAdmission(admittedTask);
+            throw error;
+        } catch (Error error) {
+            discardFailedAdmission(admittedTask);
+            throw error;
+        }
         return true;
+    }
+
+    private void discardFailedAdmission(AdmittedTask admittedTask) {
+        // A failed OwnerExecutor post guarantees that this wake was not queued. Remove the exact
+        // admission while it is still owner-inaccessible. If removal loses, close already polled
+        // the node and owns its discard.
+        if (admittedHostTasks.remove(admittedTask)) {
+            discardTask(admittedTask.task);
+        }
     }
 
     public boolean isOwnerThread() {

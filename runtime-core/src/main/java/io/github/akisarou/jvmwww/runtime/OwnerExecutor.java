@@ -15,7 +15,9 @@ public interface OwnerExecutor {
     /**
      * Enqueues a callback for later execution on the owner thread.
      *
-     * <p>This operation must be thread-safe and asynchronous with respect to the caller.</p>
+     * <p>This operation must be thread-safe and asynchronous with respect to the caller. When it
+     * throws, the callback must not have been enqueued; {@link RuntimeInstance} then removes and
+     * discards the exact admission whose wake could not be published.</p>
      */
     void post(Runnable callback);
 }

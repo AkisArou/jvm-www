@@ -16,6 +16,7 @@
 - Runtime state is per `RuntimeInstance`; never process-global.
 - Only the owner executor may touch TypeScript heap state or run generated TypeScript.
 - Foreign threads may publish transport-safe events and request one coalesced wake. They never settle a language Promise or invoke generated code directly.
+- Platform operations use `PlatformPromise` or an equivalent owner-admission ABI. A worker callback may only claim a first completion, store a copied/retained payload, and admit a host task.
 - Promise reactions and `queueMicrotask` jobs are microtasks. Timers, Android callbacks, Fetch completions, and WebSocket messages are host tasks.
 - A complete microtask checkpoint runs after the outermost host turn and before the next host task.
 - Do not implement the language Promise with `CompletableFuture`, Kotlin coroutines, executor pools, or one `Runnable` per reaction.
@@ -23,6 +24,8 @@
 - `runtime-android` is a host adapter, not a semantic runtime. It must not contain Promise settlement, timer coercion, heap ordering, interval identity, or microtask policy.
 - The Handler timer alarm uses `SystemClock.uptimeMillis` and absolute `Handler.postAtTime` with upward rounding. Do not substitute wall time, `System.nanoTime`, elapsed realtime, or an independently sampled `postDelayed` delay.
 - Android posts the reusable callbacks supplied by `runtime-core` directly. Do not add an adapter-owned callback wrapper per wake or alarm.
+- A failed `OwnerExecutor.post` must mean the callback was not enqueued. The runtime removes and discards the exact admission whose wake could not be published.
+- Reference payload ownership must be explicit. Losing, discarded, or owner-overridden platform completions release retained references exactly once without executing TypeScript.
 - Do not silently substitute Node ordering for the default Web Mobile profile.
 - Unsupported behavior fails with a stable diagnostic or explicit exception; it is never approximated silently.
 
@@ -35,9 +38,11 @@
 - Use one reusable owner wake callback per runtime instance.
 - Avoid primitive boxing where checked IR can select a specialized ABI.
 - Preserve the accepted fused async-frame ABI unless a new decision record supplies contrary allocation and lifetime evidence.
+- A platform operation's common completion object is the returned Promise, foreign first-completion token, and admitted `RuntimeTask`. Do not add a resolver/future/task wrapper layer.
+- Platform completion publication uses the object's monitor fast path rather than allocating one atomic holder per operation; do not replace it with reflection-sensitive field updaters without R8 evidence.
 - Timer slots and heap entries may be reused, but never at the cost of stale-handle safety or callback ordering.
 - Avoid base64 and repeated byte copies in binary transports unless a compatibility boundary requires them and a test records the cost.
-- Every optimization remains subordinate to observable ordering, cancellation, and error semantics.
+- Every optimization remains subordinate to observable ordering, cancellation, ownership, and error semantics.
 
 ## Verification
 
@@ -47,7 +52,7 @@ Run before every runtime or Android-host commit:
 ./scripts/test-core.sh
 ```
 
-The gate compiles `runtime-core`, `runtime-androi`, and both deterministic testkits against Java 8. Ordering changes require falsifying trace tests. Concurrency changes require a deterministic race test plus repeated stress runs. Android-host changes require structural evidence for uptime/`postAtTime`, direct callback posting, and the absence of another scheduler. Later compiler integrations must also pass the Native TypeScript and ScriptC gates at their pinned checkpoints.
+The gate compiles `runtime-core`, `runtime-testkit`, `runtime-android`, and `runtime-android-testkit` against Java 8. Ordering changes require falsifying trace tests. Concurrency changes require a deterministic race test plus repeated stress runs. Platform-completion changes require first-completion, completion-versus-close, losing-reference disposal, failed-owner-post, and separate-runtime isolation tests. Android-host changes require structural evidence for uptime/`postAtTime`, direct callback posting, and the absence of another scheduler. Later compiler integrations must also pass the Native TypeScript and ScriptC gates at their pinned checkpoints.
 
 ## Commit discipline
 

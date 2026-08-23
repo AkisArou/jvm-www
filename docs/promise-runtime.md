@@ -1,12 +1,12 @@
 # Promise runtime and compiler ABI
 
-Status: Promise core and fused async-frame ABI implemented; ScriptC async-state emission is not yet integrated end to end.
+Status: Promise core, fused async-frame ABI, and fused platform-completion ABI implemented; ScriptC async-state emission is not yet integrated end to end.
 
 ## Goals
 
 The Promise object preserves ECMAScript-observable ordering while exposing a specialization-friendly Java ABI to checked ScriptC lowering. It is not a wrapper over `CompletableFuture`, an executor, or a coroutine library.
 
-Every operation is owner-confined. A network, timer, or Android callback on another thread first publishes a transport-safe host task; that task settles the Promise while the runtime owner is executing.
+Language Promise state remains owner-confined. A network, socket, Android, or other platform callback on another thread may only publish a transport-safe completion and admit a host task; that host task settles the Promise while the runtime owner is executing.
 
 ## Representation
 
@@ -23,7 +23,7 @@ reaction head/tail
 rejection tracking flags
 ```
 
-The state distinguishes fulfillment from rejection, so rejection reasons use the same unboxed payload algebra. JVM garbage collection owns reference lifetime. No process-global Promise registry exists.
+The state distinguishes fulfillment from rejection, so rejection reasons use the same unboxed payload algebra. JVM garbage collection owns ordinary reference lifetime. No process-global Promise registry exists.
 
 ## Reaction ABI
 
@@ -86,6 +86,45 @@ Suspension/adoption requests are staged and committed only after the generated s
 
 The normative rationale and lowering contract are recorded in [decision 0001](decisions/0001-fused-async-frame.md).
 
+## Fused platform-completion ABI
+
+A platform-backed operation begins on the owner:
+
+```java
+PlatformPromise pending = runtime.newPlatformPromise();
+```
+
+The same object is returned as the language `JsPromise`, retained as the platform first-completion token, and admitted as the host `RuntimeTask`. This eliminates a separate resolver object, future, completion wrapper, and queue-task wrapper specific to the capability.
+
+The foreign API is specialized:
+
+```text
+tryFulfillVoid
+tryFulfillNumber
+tryFulfillBoolean
+tryFulfillReference
+
+tryRejectVoid
+tryRejectNumber
+tryRejectBoolean
+tryRejectReference
+```
+
+Number and boolean values stay in primitive fields. The first platform completion wins under the object's monitor, records its payload, and calls `RuntimeInstance.admitHostTask(this)`. The worker thread never invokes `JsPromise.fulfill*`, `reject*`, a reaction, or generated TypeScript.
+
+On the owner, `PlatformPromise.execute` performs the ordinary Promise settlement. Each platform completion is therefore a host task with a complete reaction/microtask checkpoint before the next host task.
+
+Reference overloads may receive a `PlatformReferenceDisposer`. Ownership moves into the completion call even when it loses. The disposer runs exactly once when:
+
+- another platform completion already won;
+- runtime shutdown wins before delivery;
+- owner-side Promise settlement already locked the destination;
+- owner-wake publication fails and the admission is removed.
+
+A successful reference settlement transfers ownership into the Promise and does not invoke the disposer. The object's monitor is used instead of allocating one `AtomicInteger` per platform operation or using a reflection-sensitive field updater under R8.
+
+The normative ownership, shutdown, and race contract is recorded in [decision 0004](decisions/0004-fused-platform-promise.md).
+
 ## Current exclusions
 
 The current runtime does not claim support for:
@@ -95,6 +134,7 @@ The current runtime does not claim support for:
 - end-to-end ScriptC emission of async state machines;
 - a user-visible `finally` method independent of compiler lowering;
 - Web or Node rejection events;
-- timers or platform Promise adapters.
+- cancellation of an underlying platform operation merely because a Promise becomes unreachable;
+- Fetch, WebSocket, or stream semantics beyond the generic platform-completion boundary.
 
 Each exclusion remains explicit until its ordering and ownership tests exist.

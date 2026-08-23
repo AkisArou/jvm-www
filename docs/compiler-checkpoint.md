@@ -48,7 +48,7 @@ may receive either handle. Trailing callback arguments belong in the generated
 `RuntimeTask` capture; the Java timer queue does not add an argument-array or
 per-tick wrapper.
 
-The Android attachment ABI is now concrete:
+The Android attachment ABI is concrete:
 
 ```java
 HandlerRuntimeHost host = HandlerRuntimeHost.forCurrentLooper();
@@ -61,20 +61,50 @@ It posts the runtime's reusable callbacks directly to one Handler and uses
 compiler must not emit Handler calls, Android timer objects, or target-specific
 Promise checkpoints.
 
-The Promise core and the compiler-facing `AsyncFrame` ABI are implemented
-independently of the unavailable emitter checkpoint. The accepted lowering and
-scheduling contracts are recorded in:
+The capability-facing platform Promise ABI is:
+
+```java
+PlatformPromise pending = runtime.newPlatformPromise();
+
+platformOperation.start(
+    value -> pending.tryFulfillReference(value, valueDisposer),
+    error -> pending.tryRejectReference(error));
+
+return pending;
+```
+
+For primitive results, capability bindings call the corresponding
+`tryFulfillNumber`, `tryFulfillBoolean`, `tryRejectNumber`, or
+`tryRejectBoolean` method and avoid boxing. The same `PlatformPromise` object is
+the returned language Promise, foreign first-completion token, and admitted
+host task.
+
+A generated or handwritten capability binding must obey these rules:
+
+- create `PlatformPromise` only during an active owner language turn;
+- copy or retain transport-safe payloads before publishing them;
+- never call owner-only `JsPromise.fulfill*` or `reject*` from a worker;
+- treat reference arguments to disposer overloads as moved;
+- never add `CompletableFuture`, coroutine dispatch, or a per-completion
+  Android `Runnable`;
+- keep Fetch, WebSocket, body, abort, and error semantics in their capability
+  modules rather than hiding them inside `PlatformPromise`.
+
+The Promise core and compiler-facing `AsyncFrame` ABI are implemented
+independently of the unavailable emitter checkpoint. The accepted contracts are
+recorded in:
 
 ```text
 docs/promise-runtime.md
 docs/decisions/0001-fused-async-frame.md
 docs/decisions/0002-one-armed-logical-timers.md
 docs/decisions/0003-android-handler-runtime-host.md
+docs/decisions/0004-fused-platform-promise.md
 ```
 
 A future ScriptC integration must consume checked IR and generate subclasses of
 `AsyncFrame`; it must not reinterpret TypeScript AST independently. The emitter
 may adapt exact method names as the reachable IR requires, but any incompatible
-change to the fused result-Promise/frame/resume-job, one-armed timer, or Android
-host decisions must update the decision record and its conformance evidence
+change to the fused async-frame, one-armed timer, Android host, or fused platform
+Promise decisions must update the decision record and its conformance evidence
 rather than silently introducing a parallel ABI.
