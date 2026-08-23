@@ -1,0 +1,48 @@
+name: implement JVM intervals
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/implement-intervals.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply interval runtime slice
+        run: python3 scripts/implement-intervals.py
+      - name: Verify Java 8 runtime conformance
+        run: ./scripts/test-core.sh
+      - name: Commit directly to main
+        run: |
+          git config user.name 'Adam Karafyllidis'
+          git config user.email 'akisarou90@gmail.com'
+          git add \
+            AGENTS.md \
+            README.md \
+            docs/architecture.md \
+            docs/decisions/0002-one-armed-logical-timers.md \
+            docs/decisions/0003-reuse-interval-entry.md \
+            runtime-core/src/main/java/io/github/akisarou/jvmwww/runtime/RuntimeInstance.java \
+            runtime-core/src/main/java/io/github/akisarou/jvmwww/runtime/RuntimeTimerQueue.java \
+            runtime-testkit/src/main/java/io/github/akisarou/jvmwww/testkit/IntervalConformance.java \
+            scripts/test-core.sh
+          git commit -m 'Implement reusable JVM intervals' -m 'Intervals share the per-runtime timeout heap and generation-safe handle space. Reuse each repeating TimerEntry as its own RuntimeTask, re-arm from the post-callback monotonic clock before microtasks, and preserve synchronous self-clear without one Runnable or timer-node allocation per tick.' -m 'Add ten Java 8 conformance cases for no-catch-up timing, self and microtask cancellation, cross-clearing, ordering, failures, stale handles, shutdown, and ownership. Record the contract as ADR 0003.'
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            git rebase origin/main
+            ./scripts/test-core.sh
+          fi
+          git push origin HEAD:main
