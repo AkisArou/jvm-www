@@ -22,5 +22,5 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 application {
-    mainClass.set("io.github.akisarou.jvmwww.web.url.testkit.URLSearchParamsConformance")
+    mainClass.set("io.github.akisarou.jvmwww.web.url.testkit.WebUrlConformance")
 }

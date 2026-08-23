@@ -26,17 +26,33 @@ mapfile -d '' URL_SOURCES < <(
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
   -cp "$OUT/core:$OUT/encoding" -d "$OUT/url" "${URL_SOURCES[@]}"
 java -cp "$OUT/core:$OUT/encoding:$OUT/url" \
-  io.github.akisarou.jvmwww.web.url.testkit.URLSearchParamsConformance
+  io.github.akisarou.jvmwww.web.url.testkit.WebUrlConformance
+
+url_shape="$(
+  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -p \
+    io.github.akisarou.jvmwww.web.url.URL
+)"
+if [[ "$url_shape" != *"implements io.github.akisarou.jvmwww.web.url.URLSearchParamsUpdateTarget"* ]] || \
+   [[ "$url_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'URL must own the live URLSearchParams update target without becoming a task or Runnable\n' >&2
+  exit 1
+fi
 
 url_verbose="$(
   javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -verbose \
+    io.github.akisarou.jvmwww.web.url.URL \
     io.github.akisarou.jvmwww.web.url.URLSearchParams \
+    io.github.akisarou.jvmwww.web.url.UrlParser \
+    io.github.akisarou.jvmwww.web.url.UrlHostParser \
+    io.github.akisarou.jvmwww.web.url.UrlPath \
+    io.github.akisarou.jvmwww.web.url.UrlRecord \
+    io.github.akisarou.jvmwww.web.url.UrlPercentCodec \
     io.github.akisarou.jvmwww.web.url.FormUrlCodec \
     io.github.akisarou.jvmwww.web.url.UrlScalar
 )"
 if grep -Eq \
     'java/net/(URI|URL|URLEncoder|URLDecoder)|java/nio/charset|java/util/(HashMap|TreeMap)|CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ExecutorService|android/os/Handler|java/lang/Runnable' \
     <<<"$url_verbose"; then
-  printf 'web-url search parameters must use the selected form/UTF-8 algorithms without java.net, charset wrappers, maps, or schedulers\n' >&2
+  printf 'web-url must use selected URL/form/UTF-8 algorithms without java.net, charset wrappers, maps, or schedulers\n' >&2
   exit 1
 fi
