@@ -19,6 +19,7 @@ jobs:
           java-version: '17'
       - run: ./scripts/test-core.sh
       - run: ./scripts/test-encoding.sh
+      - run: ./scripts/test-console.sh
       - run: ./scripts/test-fetch.sh
       - run: ./scripts/test-fetch-okhttp.sh
       - name: Publish connector-visible result
@@ -36,7 +37,7 @@ jobs:
               state,
               context: 'jvm-www/core',
               description: state === 'success'
-                ? 'Java 8 runtime, Web, encoding, and OkHttp conformance passed'
-                : 'Java 8 runtime, Web, encoding, or OkHttp conformance failed',
+                ? 'Java 8 runtime, Web, encoding, console, and OkHttp conformance passed'
+                : 'Java 8 runtime, Web, encoding, console, or OkHttp conformance failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });

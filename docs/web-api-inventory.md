@@ -33,13 +33,23 @@ Candidate globals:
 
 - `globalThis` as the actual global object;
 - `global`, `window`, and `self` as compatibility aliases, without creating a browser `Window`;
-- `console` with formatting in the compatibility layer and a pluggable sink;
 - `__DEV__` as a compile-time or generated build constant;
 - a deliberately small `process.env.NODE_ENV` compatibility object only when selected;
 - `navigator` as a narrow immutable capability description, not a browser navigator;
 - `alert` only through an Android/UI capability, never from runtime-core.
 
-The Android console sink can use `android.util.Log`. Desktop JVM tests use a deterministic recording sink. Formatting, grouping, counters, and timers should not be delegated blindly to Logcat.
+The implemented first Console slice provides:
+
+- owner-confined `log`, `debug`, `info`, `warn`, `error`, and the `assertCondition` JVM ABI for `console.assert`;
+- the Console Standard count map, timer table, and group stack per `Console` instance;
+- `count`, `countReset`, `group`, `groupCollapsed`, `groupEnd`, `time`, `timeLog`, `timeEnd`, and `clear`;
+- recursive `%s`, `%d`, `%i`, `%f`, `%o`, `%O`, and `%c` consumption;
+- a `ConsoleValueFormatter` boundary so compiler/profile code can supply exact ECMAScript conversions;
+- a synchronous `ConsoleSink` boundary with distinct printer levels and group depth;
+- a monotonic `ConsoleClock`, deterministic millisecond output, and stable duplicate/missing-label warnings;
+- an always-available discard sink when no developer console is selected.
+
+Formatting, grouping, counters, and timers live in `web-console`; they are not delegated to Logcat. An Android sink may later use `android.util.Log`, but it remains a platform adapter and must copy or consume transient arguments synchronously. `table`, `trace`, `dir`, and `dirxml` are unreached and are not approximated with Java reflection or stack traces.
 
 ### Scheduling and time
 
