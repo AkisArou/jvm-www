@@ -17,6 +17,7 @@ java -cp "$OUT" io.github.akisarou.jvmwww.testkit.RuntimeInstanceConformance
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.PromiseConformance
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.AsyncFrameConformance
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.TimerConformance
+java -cp "$OUT" io.github.akisarou.jvmwww.testkit.IntervalConformance
 
 promise_job_shape="$(
   javap -classpath "$OUT" -p \
@@ -35,6 +36,16 @@ if [[ "$async_frame_shape" != *"extends io.github.akisarou.jvmwww.runtime.JsProm
    [[ "$async_frame_shape" != *"implements io.github.akisarou.jvmwww.runtime.JsPromise\$PromiseJob"* ]] || \
    [[ "$async_frame_shape" == *"java.lang.Runnable"* ]]; then
   printf 'AsyncFrame must be the result Promise and intrusive runtime job, never a Runnable\n' >&2
+  exit 1
+fi
+
+timer_queue_shape="$(
+  javap -classpath "$OUT" -p io.github.akisarou.jvmwww.runtime.RuntimeTimerQueue
+)"
+timer_runnable_count="$(grep -c 'java.lang.Runnable' <<<"$timer_queue_shape" || true)"
+if [[ "$timer_runnable_count" -ne 1 ]]; then
+  printf 'RuntimeTimerQueue must own exactly one reusable host Runnable, got %s\n' \
+    "$timer_runnable_count" >&2
   exit 1
 fi
 

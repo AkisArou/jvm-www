@@ -17,7 +17,7 @@ React Native is useful as an API inventory and integration reference. ECMAScript
 
 ## Current slice
 
-The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, and one-shot logical timers with:
+The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, and logical timeout/interval timers with:
 
 - explicit allocation-free outer host-turn entry/exit calls for generated code;
 - one owner thread per runtime instance;
@@ -31,12 +31,14 @@ The current implementation provides a pure-Java `RuntimeInstance`, Promise core,
 - checkpoint-based unhandled and later-handled rejection tracking;
 - an `AsyncFrame` whose result Promise, live continuation fields, and resume microtask are one object;
 - wrapper-free sequential awaits and wrapper-free async result adoption;
-- a per-runtime deadline/sequence heap for `setTimeout` and `clearTimeout`;
-- exact clamp-and-truncate delay coercion, generation-safe 53-bit handles, and eager cancellation;
+- one per-runtime deadline/sequence heap shared by `setTimeout` and `setInterval`;
+- exact clamp-and-truncate delay coercion, generation-safe 53-bit handles, and eager cross-kind cancellation;
+- non-overlapping intervals re-armed from callback completion with a fresh FIFO sequence;
+- cancellation from an interval callback or its microtask checkpoint before re-arm;
 - one reusable platform timer alarm with a full microtask checkpoint between timer callbacks;
 - deterministic Java conformance tests plus executable Node ordering references.
 
-End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, intervals, the Android `Handler` adapter, and Web capabilities remain separate incremental slices.
+End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, the Android `Handler` timer adapter, and Web capabilities remain separate incremental slices.
 
 ## Run the core conformance tests
 

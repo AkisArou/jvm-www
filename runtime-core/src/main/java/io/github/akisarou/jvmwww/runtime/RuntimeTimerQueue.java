@@ -2,7 +2,7 @@ package io.github.akisarou.jvmwww.runtime;
 
 import java.util.Objects;
 
-/** Owner-confined logical one-shot timer heap. */
+/** Owner-confined logical timeout and interval heap. */
 final class RuntimeTimerQueue {
     static final long TIMEOUT_MAX_MILLIS = 2_147_483_647L;
 
@@ -55,32 +55,28 @@ final class RuntimeTimerQueue {
     }
 
     double setTimeout(RuntimeTask callback, double delayMilliseconds) {
-        runtime.assertLanguageExecution();
-        ensureOpen();
-        Objects.requireNonNull(callback, "callback");
-
-        long nowNanos = readNowNanos();
-        long delayMillis = coerceDelayMillis(delayMilliseconds);
-        TimerEntry entry = allocateSlot();
-        entry.deadlineNanos = saturatingAdd(nowNanos, delayMillis * NANOS_PER_MILLI);
-        entry.sequence = allocateSequence();
-        entry.callback = callback;
-        push(entry);
-
-        if (!drainingWake) {
-            synchronizeAlarm();
-        }
-        return (double) encodeHandle(entry);
+        return schedule(callback, delayMilliseconds, false);
     }
 
-    void clearTimeout(double handle) {
+    double setInterval(RuntimeTask callback, double delayMilliseconds) {
+        return schedule(callback, delayMilliseconds, true);
+    }
+
+    void clearTimer(double handle) {
         runtime.assertLanguageExecution();
         if (closed) {
             return;
         }
 
         TimerEntry entry = lookupHandle(handle);
-        if (entry == null) {
+        if (entry == null || entry.cancelled) {
+            return;
+        }
+
+        entry.cancelled = true;
+        if (entry.firing) {
+            // Keep the slot and callback alive until the callback's complete microtask checkpoint
+            // returns. This prevents reentrant registration from reusing live interval metadata.
             return;
         }
 
@@ -121,6 +117,35 @@ final class RuntimeTimerQueue {
         return (long) delayMilliseconds;
     }
 
+    private double schedule(
+            RuntimeTask callback,
+            double delayMilliseconds,
+            boolean interval) {
+        runtime.assertLanguageExecution();
+        ensureOpen();
+        Objects.requireNonNull(callback, "callback");
+
+        // Read fallible inputs before consuming a reusable slot. A clock violation or exhausted
+        // sequence must not make one generation unreachable.
+        long nowNanos = readNowNanos();
+        long delayNanos = coerceDelayMillis(delayMilliseconds) * NANOS_PER_MILLI;
+        long deadlineNanos = saturatingAdd(nowNanos, delayNanos);
+        long sequence = allocateSequence();
+
+        TimerEntry entry = allocateSlot();
+        entry.deadlineNanos = deadlineNanos;
+        entry.delayNanos = delayNanos;
+        entry.sequence = sequence;
+        entry.callback = callback;
+        entry.interval = interval;
+        push(entry);
+
+        if (!drainingWake) {
+            synchronizeAlarm();
+        }
+        return (double) encodeHandle(entry);
+    }
+
     private void runTimerWake() {
         if (closed || runtime.isClosed()) {
             return;
@@ -138,9 +163,11 @@ final class RuntimeTimerQueue {
                 }
 
                 TimerEntry due = removeAt(0);
-                RuntimeTask callback = due.callback;
-                releaseSlot(due);
-                runtime.executeHostTask(callback);
+                if (due.interval) {
+                    fireInterval(due);
+                } else {
+                    fireTimeout(due);
+                }
                 processed++;
 
                 if (closed || runtime.isClosed()) {
@@ -153,6 +180,45 @@ final class RuntimeTimerQueue {
                 synchronizeAlarm();
             }
         }
+    }
+
+    private void fireTimeout(TimerEntry entry) {
+        RuntimeTask callback = entry.callback;
+        releaseSlot(entry);
+        runtime.executeHostTask(callback);
+    }
+
+    private void fireInterval(TimerEntry entry) {
+        entry.firing = true;
+        runtime.executeHostTask(entry.callback);
+        entry.firing = false;
+
+        if (entry.cancelled || closed || runtime.isClosed()) {
+            RuntimeTask callback = entry.callback;
+            releaseSlot(entry);
+            runtime.discardTask(callback);
+            return;
+        }
+
+        try {
+            // ScriptC intervals are completion-based, not fixed-rate: they cannot overlap or catch
+            // up after a long callback. Fresh sequence makes the re-arm a new FIFO registration.
+            entry.deadlineNanos = saturatingAdd(readNowNanos(), entry.delayNanos);
+            entry.sequence = allocateSequence();
+            push(entry);
+        } catch (RuntimeException error) {
+            discardFailedInterval(entry);
+            throw error;
+        } catch (Error error) {
+            discardFailedInterval(entry);
+            throw error;
+        }
+    }
+
+    private void discardFailedInterval(TimerEntry entry) {
+        RuntimeTask callback = entry.callback;
+        releaseSlot(entry);
+        runtime.discardTask(callback);
     }
 
     private void synchronizeAlarm() {
@@ -212,15 +278,21 @@ final class RuntimeTimerQueue {
 
         entry.active = true;
         entry.heapIndex = -1;
+        entry.cancelled = false;
+        entry.firing = false;
         return entry;
     }
 
     private void releaseSlot(TimerEntry entry) {
         entry.active = false;
         entry.deadlineNanos = 0L;
+        entry.delayNanos = 0L;
         entry.sequence = 0L;
         entry.callback = null;
         entry.heapIndex = -1;
+        entry.interval = false;
+        entry.firing = false;
+        entry.cancelled = false;
 
         // A slot at its maximum generation is retired rather than making its final stale handle
         // valid again. Exhausting this space would require billions of reuses of one exact slot.
@@ -388,11 +460,15 @@ final class RuntimeTimerQueue {
         final int slotIndex;
         long generation;
         long deadlineNanos;
+        long delayNanos;
         long sequence;
         RuntimeTask callback;
         int heapIndex = -1;
         int nextFreeSlot = -1;
+        boolean interval;
         boolean active;
+        boolean firing;
+        boolean cancelled;
 
         TimerEntry(int slotIndex) {
             this.slotIndex = slotIndex;

@@ -34,18 +34,33 @@ runtime.queueMicrotask(generatedRuntimeTask);
 runtime.admitHostTask(copiedPlatformCompletion);
 ```
 
-The Promise core and the compiler-facing `AsyncFrame` ABI are now implemented
-independently of that unavailable emitter checkpoint. The accepted lowering
-contract is recorded in:
+The compiler-facing timer ABI is:
+
+```java
+double timeout = runtime.setTimeout(generatedCallbackTask, delay);
+double interval = runtime.setInterval(generatedCallbackTask, delay);
+runtime.clearTimeout(timeout);
+runtime.clearInterval(interval);
+```
+
+Timeout and interval handles share one numeric map, so either clear operation
+may receive either handle. Trailing callback arguments belong in the generated
+`RuntimeTask` capture; the Java timer queue does not add an argument-array or
+per-tick wrapper.
+
+The Promise core and the compiler-facing `AsyncFrame` ABI are implemented
+independently of the unavailable emitter checkpoint. The accepted lowering and
+scheduling contracts are recorded in:
 
 ```text
 docs/promise-runtime.md
 docs/decisions/0001-fused-async-frame.md
+docs/decisions/0002-one-armed-logical-timers.md
 ```
 
 A future ScriptC integration must consume checked IR and generate subclasses of
 `AsyncFrame`; it must not reinterpret TypeScript AST independently. The emitter
 may adapt exact method names as the reachable IR requires, but any incompatible
-change to the fused result-Promise/frame/resume-job decision must update the
-decision record and its conformance evidence rather than silently introducing a
-parallel ABI.
+change to the fused result-Promise/frame/resume-job or one-armed timer decisions
+must update the decision record and its conformance evidence rather than
+silently introducing a parallel ABI.

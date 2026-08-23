@@ -158,21 +158,39 @@ public final class RuntimeInstance implements AutoCloseable {
         return new JsPromise(this);
     }
 
-    /** Registers one one-shot timer and returns an exactly representable JavaScript-number handle. */
+    /** Registers a one-shot timer and returns an exactly representable number handle. */
     public double setTimeout(RuntimeTask callback, double delayMilliseconds) {
         assertLanguageExecution();
-        if (timerQueue == null) {
-            timerQueue = new RuntimeTimerQueue(this, timerHost, hostTasksPerWake);
-        }
-        return timerQueue.setTimeout(callback, delayMilliseconds);
+        return getOrCreateTimerQueue().setTimeout(callback, delayMilliseconds);
     }
 
-    /** Cancels a timer. Invalid, stale, already-fired, and fractional handles are harmless no-ops. */
+    /** Registers a non-overlapping interval in the same logical timer queue. */
+    public double setInterval(RuntimeTask callback, double delayMilliseconds) {
+        assertLanguageExecution();
+        return getOrCreateTimerQueue().setInterval(callback, delayMilliseconds);
+    }
+
+    /** Cancels either timer kind; invalid, stale, and already-fired handles are no-ops. */
     public void clearTimeout(double handle) {
         assertLanguageExecution();
         if (timerQueue != null) {
-            timerQueue.clearTimeout(handle);
+            timerQueue.clearTimer(handle);
         }
+    }
+
+    /** Cancels either timer kind; timeout and interval handles deliberately share one map. */
+    public void clearInterval(double handle) {
+        assertLanguageExecution();
+        if (timerQueue != null) {
+            timerQueue.clearTimer(handle);
+        }
+    }
+
+    private RuntimeTimerQueue getOrCreateTimerQueue() {
+        if (timerQueue == null) {
+            timerQueue = new RuntimeTimerQueue(this, timerHost, hostTasksPerWake);
+        }
+        return timerQueue;
     }
 
     /** Begins a host entry turn on the owner thread. Calls may nest. */

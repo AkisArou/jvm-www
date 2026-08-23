@@ -62,7 +62,7 @@ host callback enters
 
 Microtasks are never represented as Android `Runnable` objects one-for-one. The runtime posts one reusable wake callback only when work is admitted while idle. Work queued during an active owner turn is consumed by that turn's checkpoint without a post.
 
-A due timer callback is one host task. When multiple timers are due, each callback receives a complete microtask and rejection checkpoint before the next timer callback begins.
+A due timeout or interval callback is one host task. When multiple timers are due, each callback receives a complete microtask and rejection checkpoint before the next timer callback begins.
 
 Foreign threads can publish transport-safe task objects, but cannot run generated TypeScript or touch owner-confined state.
 
@@ -85,7 +85,7 @@ The default planned profile is **Web Mobile**:
 
 An optional Node-compatibility profile may add those APIs later, with their distinct ordering. It must not alias `process.nextTick` to `queueMicrotask`.
 
-The first checked timer ABI preserves ScriptC's current Node-compatible delay clamp and truncation exactly. HTML nested-timer clamping is a separate future profile decision and must not be introduced implicitly by a platform adapter.
+The checked timer ABI preserves ScriptC's current Node-compatible delay clamp and truncation exactly. HTML nested-timer clamping is a separate future profile decision and must not be introduced implicitly by a platform adapter.
 
 ## Planned modules
 
@@ -116,6 +116,7 @@ The design is intended to exploit checked whole-program IR rather than recreate 
 - primitive payload and continuation specialization belongs at the compiler/runtime ABI boundary;
 - one generated async frame is the result Promise, continuation storage, and resume job;
 - logical timers reuse slot entries and expose only one reusable platform alarm callback;
+- firing intervals keep their slot out of the free list until the callback checkpoint completes;
 - foreign payloads are copied or retained once and decoded on the owner;
 - no periodic polling loop;
 - no JNI transition on the direct Android path.
@@ -148,15 +149,15 @@ The synchronous prefix executes through `start()` in the caller's active turn. `
 
 The full lowering contract, rejected alternatives, and permanent evidence requirements are normative in [decision 0001](decisions/0001-fused-async-frame.md).
 
-## Implemented one-shot timer ABI
+## Implemented logical timer ABI
 
-`RuntimeInstance.setTimeout` and `clearTimeout` use a lazily allocated deadline/sequence min-heap. Handles are positive integers exactly representable by a JavaScript number; slot generation is encoded into the handle so a stale cancellation cannot affect a reused timer entry.
+`RuntimeInstance.setTimeout`, `setInterval`, `clearTimeout`, and `clearInterval` use one lazily allocated deadline/sequence min-heap. Both timer kinds share one positive-number handle map; either clear function cancels either kind. Slot generation is encoded into each exactly representable handle so stale cancellation cannot affect a reused timer entry.
 
-The logical queue owns delay coercion, ordering, cancellation, fairness, and callback lifecycle. `TimerHost` owns only a monotonic timestamp plus one replaceable absolute alarm. Adding or cancelling a timer touches the host only when the earliest deadline changes. There is no periodic pump, `ScheduledExecutorService`, or platform `Runnable` per timer.
+The logical queue owns delay coercion, ordering, cancellation, interval re-arm, fairness, and callback lifecycle. `TimerHost` owns only a monotonic timestamp plus one replaceable absolute alarm. Adding or cancelling a timer touches the host only when the earliest deadline changes. There is no periodic pump, `ScheduledExecutorService`, or platform `Runnable` per timer.
 
-Every due callback runs through the ordinary host-task entry path and therefore receives a full microtask and rejection checkpoint before another due callback. Cancellation and shutdown eagerly call `RuntimeTask.discard()` so retained native or transport resources can be released.
+Every due callback runs through the ordinary host-task entry path and therefore receives a full microtask and rejection checkpoint before another due callback. An interval remains addressable while that checkpoint runs, so cancellation from the callback or one of its microtasks prevents re-arm. Otherwise it is scheduled from callback-completion time with its original coerced delay and a fresh FIFO sequence; intervals never overlap or perform fixed-rate catch-up.
 
-The full contract, current delay profile, handle encoding, and Android adapter requirements are normative in [decision 0002](decisions/0002-one-armed-logical-timers.md).
+Cancellation and shutdown call `RuntimeTask.discard()` when a registration is retired, including an interval that may already have delivered earlier ticks. The full contract, current delay profile, handle encoding, and Android adapter requirements are normative in [decision 0002](decisions/0002-one-armed-logical-timers.md).
 
 ## Decision records
 
