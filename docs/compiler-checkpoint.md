@@ -48,6 +48,19 @@ may receive either handle. Trailing callback arguments belong in the generated
 `RuntimeTask` capture; the Java timer queue does not add an argument-array or
 per-tick wrapper.
 
+The Android attachment ABI is now concrete:
+
+```java
+HandlerRuntimeHost host = HandlerRuntimeHost.forCurrentLooper();
+RuntimeInstance runtime = new RuntimeInstance(host, errorReporter, host);
+```
+
+The same host object is the owner executor and the one-alarm timer capability.
+It posts the runtime's reusable callbacks directly to one Handler and uses
+`SystemClock.uptimeMillis` with absolute `Handler.postAtTime` deadlines. The
+compiler must not emit Handler calls, Android timer objects, or target-specific
+Promise checkpoints.
+
 The Promise core and the compiler-facing `AsyncFrame` ABI are implemented
 independently of the unavailable emitter checkpoint. The accepted lowering and
 scheduling contracts are recorded in:
@@ -56,11 +69,12 @@ scheduling contracts are recorded in:
 docs/promise-runtime.md
 docs/decisions/0001-fused-async-frame.md
 docs/decisions/0002-one-armed-logical-timers.md
+docs/decisions/0003-android-handler-runtime-host.md
 ```
 
 A future ScriptC integration must consume checked IR and generate subclasses of
 `AsyncFrame`; it must not reinterpret TypeScript AST independently. The emitter
 may adapt exact method names as the reachable IR requires, but any incompatible
-change to the fused result-Promise/frame/resume-job or one-armed timer decisions
-must update the decision record and its conformance evidence rather than
-silently introducing a parallel ABI.
+change to the fused result-Promise/frame/resume-job, one-armed timer, or Android
+host decisions must update the decision record and its conformance evidence
+rather than silently introducing a parallel ABI.

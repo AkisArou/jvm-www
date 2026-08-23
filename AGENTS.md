@@ -1,6 +1,6 @@
 # Working in jvm-www
 
-`jvm-www` is the direct-JVM runtime and Web-capability layer for Native TypeScript. Read `docs/architecture.md` and the applicable records under `docs/decisions/` before changing runtime behavior. Decision records are the shared handoff between compiler, runtime, and capability work; do not rely on private chat context.
+`jvm-www` is the direct-JVM runtime and Web-capability layer for Native TypeScript. Read `docs/architecture.md` and the applicable records under `docs/decisions/` before changing runtime behavior. Decision records are the shared handoff between compiler, runtime, Android-host, and capability work; do not rely on private chat context.
 
 ## Authority and boundaries
 
@@ -8,7 +8,7 @@
 - WHATWG specifications define selected Web APIs.
 - Native TypeScript's checked static profile may reject unsupported shapes precisely.
 - React Native is an API inventory and an Android implementation reference, not the semantic authority.
-- ScriptC owns checked-IR semantics and JVM lowering. This repository owns the Java runtime ABI, scheduler primitives, capability providers, and conformance fixtures.
+- ScriptC owns checked-IR semantics and JVM lowering. This repository owns the Java runtime ABI, scheduler primitives, Android host adapter, capability providers, and conformance fixtures.
 - Do not create a second TypeScript parser, AST lowering path, or opaque target-specific language semantics here.
 
 ## Non-negotiable runtime rules
@@ -19,14 +19,18 @@
 - Promise reactions and `queueMicrotask` jobs are microtasks. Timers, Android callbacks, Fetch completions, and WebSocket messages are host tasks.
 - A complete microtask checkpoint runs after the outermost host turn and before the next host task.
 - Do not implement the language Promise with `CompletableFuture`, Kotlin coroutines, executor pools, or one `Runnable` per reaction.
-- Logical timers use one per-runtime deadline heap and at most one armed platform callback. Do not add `ScheduledExecutorService`, one `Runnable` per timer, or a periodic timer pump.
+- Logical timers use one per-runtime deadline heap and at most one armed platform callback. Do not add `ScheduledExecutorService`, one `Runnable` per timer, fixed-rate interval catch-up, or a periodic timer pump.
+- `runtime-android` is a host adapter, not a semantic runtime. It must not contain Promise settlement, timer coercion, heap ordering, interval identity, or microtask policy.
+- The Handler timer alarm uses `SystemClock.uptimeMillis` and absolute `Handler.postAtTime` with upward rounding. Do not substitute wall time, `System.nanoTime`, elapsed realtime, or an independently sampled `postDelayed` delay.
+- Android posts the reusable callbacks supplied by `runtime-core` directly. Do not add an adapter-owned callback wrapper per wake or alarm.
 - Do not silently substitute Node ordering for the default Web Mobile profile.
 - Unsupported behavior fails with a stable diagnostic or explicit exception; it is never approximated silently.
 
 ## Performance rules
 
-- Core runtime code is Java and compiles against the Java 8 API surface for Android compatibility.
+- Production runtime code is Java and compiles against the Java 8 API surface for Android compatibility.
 - `runtime-core` has no Android, OkHttp, Kotlin, or general utility dependency.
+- `runtime-android` depends only on `runtime-core` and the Android API surface; test-only `android.os` stubs stay in `runtime-android-testkit` and must never enter a production artifact.
 - Keep hot owner-turn entry/exit paths allocation-free.
 - Use one reusable owner wake callback per runtime instance.
 - Avoid primitive boxing where checked IR can select a specialized ABI.
@@ -37,13 +41,13 @@
 
 ## Verification
 
-Run before every runtime-core commit:
+Run before every runtime or Android-host commit:
 
 ```sh
 ./scripts/test-core.sh
 ```
 
-Ordering changes require falsifying trace tests. Concurrency changes require a deterministic race test plus repeated stress runs. Later compiler integrations must also pass the Native TypeScript and ScriptC gates at their pinned checkpoints.
+The gate compiles `runtime-core`, `runtime-androi`, and both deterministic testkits against Java 8. Ordering changes require falsifying trace tests. Concurrency changes require a deterministic race test plus repeated stress runs. Android-host changes require structural evidence for uptime/`postAtTime`, direct callback posting, and the absence of another scheduler. Later compiler integrations must also pass the Native TypeScript and ScriptC gates at their pinned checkpoints.
 
 ## Commit discipline
 

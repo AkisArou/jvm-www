@@ -1,6 +1,6 @@
 # 0002 — Keep logical timers in each runtime and arm one host deadline
 
-Status: accepted and implemented for `setTimeout`, `clearTimeout`, `setInterval`, and `clearInterval`; the Android `Handler` adapter remains a later slice.
+Status: accepted and implemented for `setTimeout`, `clearTimeout`, `setInterval`, and `clearInterval`; the Android `Handler` host is implemented by decision 0003.
 
 ## Context
 
@@ -54,7 +54,7 @@ A callback is already a compiler/runtime job. The runtime does not wrap every ti
 - never invoke the callback inline from `arm`;
 - cancel the current alarm when `disarm()` is called.
 
-The logical runtime uses absolute monotonic nanoseconds. An Android adapter should use the same time base as its `Handler` scheduling primitive, normally uptime, and round an absolute deadline so it does not fire early. Android does not decide delay coercion, timer ordering, handle identity, or interval behavior.
+The logical runtime uses absolute monotonic nanoseconds. `runtime-android` implements the contract with `SystemClock.uptimeMillis`, upward conversion of the absolute deadline to milliseconds, and `Handler.postAtTime`. Android does not decide delay coercion, timer ordering, handle identity, or interval behavior. The platform details and structural evidence are recorded in [decision 0003](0003-android-handler-runtime-host.md).
 
 A runtime constructed without a timer capability uses `TimerHost.UNSUPPORTED`; reaching either timer-registration function then fails explicitly instead of inventing a private scheduler.
 
@@ -164,6 +164,8 @@ The queue is allocated lazily on first timer use. It keeps:
 
 After a slot has been allocated once, later timer registrations can reuse that entry without allocating another timer node. The callback/closure itself is generated language state and is not duplicated by the timer runtime. A firing interval temporarily retains its slot to protect reentrant correctness, then returns it to the same free list when cancelled.
 
+The Android host posts the timer queue's wake callback directly. It does not create a second adapter wrapper around each arm.
+
 ## Shutdown
 
 `RuntimeInstance.close()` disarms the host alarm, removes every active timeout and interval, and calls `discard()` on every queued callback. A host alarm already posted before shutdown may still arrive, but it cannot execute TypeScript after the runtime closes.
@@ -202,7 +204,7 @@ Rejected because microtasks created by the first callback would run only after e
 - Intervals never overlap and can be cancelled through their callback checkpoint.
 - Cancellation is eager and stale-handle safe.
 - No JNI transition, worker pool, or periodic pump is introduced.
-- Refresh/ref/unref, trailing-argument compiler lowering, and Android packaging remain explicit later work.
+- Refresh/ref/unref, trailing-argument compiler lowering, and application lifecycle/DEX packaging remain explicit later work.
 
 ## Required evidence
 
@@ -227,4 +229,5 @@ Permanent tests must prove:
 - shutdown disarms and discards every timer kind;
 - owner/active-turn checks reject foreign timer mutation;
 - `TimerEntry` is not a `Runnable`;
-- no `ScheduledExecutorService`, `TimerTask`, or periodic pump enters `runtime-core`.
+- the Android host uses uptime plus absolute `postAtTime`, rounds upward, and posts the reusable callback directly;
+- no `ScheduledExecutorService`, `TimerTask`, periodic pump, wall clock, or per-timer Android callback enters the timer path.

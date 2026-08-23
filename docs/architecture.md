@@ -30,13 +30,14 @@ The compiler owns:
 - microtask checkpoints and rejection observation;
 - the logical timer heap, timer identifiers, and selected-profile coercion rules;
 - host scheduling and transport interfaces;
+- the Android `Looper`/`Handler` implementation of those host interfaces;
 - Web-compatible API state machines and capability implementations.
 
 The Android application target owns:
 
-- attaching a runtime to a `Looper`/`Handler`;
-- supplying a monotonic clock and arming only the earliest runtime deadline;
-- lifecycle and owner-thread assertions;
+- selecting the runtime's owner `Looper`;
+- creating and retaining the `HandlerRuntimeHost`;
+- lifecycle entry points and closing the runtime on its owner;
 - packaging support classes into DEX;
 - app-specific permissions and capability selection.
 
@@ -87,24 +88,27 @@ An optional Node-compatibility profile may add those APIs later, with their dist
 
 The checked timer ABI preserves ScriptC's current Node-compatible delay clamp and truncation exactly. HTML nested-timer clamping is a separate future profile decision and must not be introduced implicitly by a platform adapter.
 
-## Planned modules
+## Modules
 
 ```text
-runtime-core         owner turns, jobs, Promise core, rejection tracking, logical timers
-runtime-testkit      deterministic executor/clock and trace corpus
-runtime-android      Looper/Handler adapter, deadline arming, lifecycle
-web-events           EventTarget, Event, abort algorithms
-web-encoding         TextEncoder/TextDecoder
-web-fetch-core       Headers/Request/Response/body state and transport SPI
-web-fetch-okhttp     optional Android OkHttp transport
-websocket-core       WebSocket state machine and transport SPI
-websocket-okhttp     optional Android OkHttp transport
-web-url              WHATWG-compatible URL and URLSearchParams
+runtime-core             owner turns, jobs, Promise core, rejection tracking, logical timers
+runtime-testkit          deterministic executor/clock and trace corpus
+runtime-android          Looper/Handler owner execution and absolute uptime alarm
+runtime-android-testkit  deterministic test-only android.os model and adapter integration traces
+web-events               EventTarget, Event, abort algorithms
+web-encoding             TextEncoder/TextDecoder
+web-fetch-core           Headers/Request/Response/body state and transport SPI
+web-fetch-okhttp         optional Android OkHttp transport
+websocket-core           WebSocket state machine and transport SPI
+websocket-okhttp         optional Android OkHttp transport
+web-url                  WHATWG-compatible URL and URLSearchParams
 ```
 
-Dependencies should point from capability modules toward `runtime-core`, never from `runtime-core`
-toward Android, OkHttp, Kotlin, or another platform library. A dependency such as OkHttp is a
-replaceable transport choice, not part of the public Fetch or WebSocket ABI.
+Dependencies point from host and capability modules toward `runtime-core`, never from
+`runtime-core` toward Android, OkHttp, Kotlin, or another platform library. A dependency such as
+OkHttp is a replaceable transport choice, not part of the public Fetch or WebSocket ABI. The
+`android.os` classes in `runtime-android-testkit` exist only to compile and drive deterministic JVM
+conformance; they are not a production dependency or artifact.
 
 ## Performance rules
 
@@ -117,6 +121,7 @@ The design is intended to exploit checked whole-program IR rather than recreate 
 - one generated async frame is the result Promise, continuation storage, and resume job;
 - logical timers reuse slot entries and expose only one reusable platform alarm callback;
 - firing intervals keep their slot out of the free list until the callback checkpoint completes;
+- `HandlerRuntimeHost` posts the core callbacks directly and creates no adapter callback wrapper;
 - foreign payloads are copied or retained once and decoded on the owner;
 - no periodic polling loop;
 - no JNI transition on the direct Android path.
@@ -157,9 +162,29 @@ The logical queue owns delay coercion, ordering, cancellation, interval re-arm, 
 
 Every due callback runs through the ordinary host-task entry path and therefore receives a full microtask and rejection checkpoint before another due callback. An interval remains addressable while that checkpoint runs, so cancellation from the callback or one of its microtasks prevents re-arm. Otherwise it is scheduled from callback-completion time with its original coerced delay and a fresh FIFO sequence; intervals never overlap or perform fixed-rate catch-up.
 
-Cancellation and shutdown call `RuntimeTask.discard()` when a registration is retired, including an interval that may already have delivered earlier ticks. The full contract, current delay profile, handle encoding, and Android adapter requirements are normative in [decision 0002](decisions/0002-one-armed-logical-timers.md).
+Cancellation and shutdown call `RuntimeTask.discard()` when a registration is retired, including an interval that may already have delivered earlier ticks. The full contract and handle representation are normative in [decision 0002](decisions/0002-one-armed-logical-timers.md).
+
+## Implemented Android Handler host
+
+`HandlerRuntimeHost` implements both `OwnerExecutor` and `TimerHost` over one Handler. A foreign
+admission reaches `Handler.post`; owner identity is the configured Looper's identity. The timer
+clock is `SystemClock.uptimeMillis` converted to nanoseconds, and an absolute logical deadline is
+rounded upward to milliseconds before `Handler.postAtTime`.
+
+Arming removes the previous callback and posts the supplied reusable timer wake directly. Disarming
+removes it. The adapter contains no Promise state, logical timer entry, interval policy, delay
+coercion, or microtask queue. A typical runtime passes the same host object to both constructor
+capability slots:
+
+```java
+HandlerRuntimeHost host = HandlerRuntimeHost.forCurrentLooper();
+RuntimeInstance runtime = new RuntimeInstance(host, errorReporter, host);
+```
+
+The exact clock, rounding, lifecycle, and allocation contract is normative in [decision 0003](decisions/0003-android-handler-runtime-host.md).
 
 ## Decision records
 
 - [0001 — Fuse the async result Promise, continuation frame, and resume job](decisions/0001-fused-async-frame.md)
 - [0002 — Keep logical timers in each runtime and arm one host deadline](decisions/0002-one-armed-logical-timers.md)
+- [0003 — Bind one runtime to one Android Handler and uptime clock](decisions/0003-android-handler-runtime-host.md)
