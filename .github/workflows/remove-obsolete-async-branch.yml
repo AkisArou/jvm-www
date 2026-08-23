@@ -1,0 +1,25 @@
+name: remove obsolete async-frame branch
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  remove-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged work branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if gh api "repos/${REPOSITORY}/git/ref/heads/work/async-frame-fusion" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/work/async-frame-fusion"
+            echo "Deleted work/async-frame-fusion"
+          else
+            echo "work/async-frame-fusion is already absent"
+          fi
