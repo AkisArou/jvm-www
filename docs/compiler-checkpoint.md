@@ -14,14 +14,13 @@ At the time of this check, GitHub did not resolve that object from the public
 `5628346e56dcae419390ab15db9b464df13ad160`, and the direct-JVM checkpoint
 referenced by the parent could not be fetched by SHA.
 
-This does not block the standalone Java scheduling and Web-capability work in
+This does not block standalone Java runtime and Web-capability work in
 `jvm-www`. It does mean end-to-end compiler integration and regression testing
 cannot be reproduced from remote checkouts until the pinned ScriptC commit is
 restored or another reachable checkpoint containing the same JVM emitter work
 is supplied.
 
-The first ABI intentionally avoids committing to a Promise object layout. The
-scheduler entry points are:
+The stable scheduler entry points are:
 
 ```java
 runtime.enterHostTurn();
@@ -35,7 +34,18 @@ runtime.queueMicrotask(generatedRuntimeTask);
 runtime.admitHostTask(copiedPlatformCompletion);
 ```
 
-Promise representation and async continuation methods should be added only
-after reviewing the reachable checked IR and JVM emitter. That lets payload and
-continuation specialization follow actual compiler types instead of guessing a
-generic boxed design.
+The Promise core and the compiler-facing `AsyncFrame` ABI are now implemented
+independently of that unavailable emitter checkpoint. The accepted lowering
+contract is recorded in:
+
+```text
+docs/promise-runtime.md
+docs/decisions/0001-fused-async-frame.md
+```
+
+A future ScriptC integration must consume checked IR and generate subclasses of
+`AsyncFrame`; it must not reinterpret TypeScript AST independently. The emitter
+may adapt exact method names as the reachable IR requires, but any incompatible
+change to the fused result-Promise/frame/resume-job decision must update the
+decision record and its conformance evidence rather than silently introducing a
+parallel ABI.

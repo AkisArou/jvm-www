@@ -108,6 +108,7 @@ The design is intended to exploit checked whole-program IR rather than recreate 
 - one reusable owner wake callback exists per runtime instance;
 - Promise reactions are runtime jobs, not one `Runnable` each;
 - primitive payload and continuation specialization belongs at the compiler/runtime ABI boundary;
+- one generated async frame is the result Promise, continuation storage, and resume job;
 - foreign payloads are copied or retained once and decoded on the owner;
 - no periodic polling loop;
 - no JNI transition on the direct Android path.
@@ -116,8 +117,7 @@ Every optimization remains subordinate to observable ordering and error behavior
 
 ## Implemented Promise ABI
 
-The first Promise slice uses one owner-confined `JsPromise` object with an integer state and
-specialized payload slots. It does not use Java generics to carry language values:
+The Promise core uses one owner-confined `JsPromise` object with an integer state and specialized payload slots. It does not use Java generics to carry language values:
 
 ```text
 state:        pending | fulfilled | rejected
@@ -127,18 +127,20 @@ boolean booleanPayload
 Object referencePayload
 ```
 
-`then` registration creates one runtime reaction job, not one executor `Runnable`. A settled
-source queues that job; it never invokes the handler inline. Missing handlers copy the source
-settlement into the destination. Generated handlers resolve the destination directly, which lets
-the compiler preserve primitive specialization and select native-Promise adoption without a
-boxed generic return object.
+`then` registration creates one runtime reaction job, not one executor `Runnable`. A settled source queues that job; it never invokes the handler inline. Missing handlers copy the source settlement into the destination. Generated handlers resolve the destination directly, which lets the compiler preserve primitive specialization and select native-Promise adoption without a boxed generic return object.
 
-A resolve/reject attempt locks the Promise immediately. Adoption of a pending Promise therefore
-prevents a later direct settlement from winning. Adoption itself resumes through the microtask
-queue even when the source is already settled. Dynamic thenable assimilation remains a precise
-unsupported shape until the checked IR can represent it.
+A resolve/reject attempt locks the Promise immediately. Adoption of a pending Promise therefore prevents a later direct settlement from winning. Adoption itself resumes through the microtask queue even when the source is already settled. Dynamic thenable assimilation remains a precise unsupported shape until the checked IR can represent it.
 
-Unhandled rejection candidates are recorded per runtime and observed after a complete microtask
-checkpoint. Attaching any `then` reaction marks the source handled, including the default thrower
-created by an omitted rejection callback; a propagated rejection belongs to the destination
-Promise. The tracker is a host hook and may not execute generated TypeScript directly.
+Unhandled rejection candidates are recorded per runtime and observed after a complete microtask checkpoint. Attaching any `then` reaction marks the source handled, including the default thrower created by an omitted rejection callback; a propagated rejection belongs to the destination Promise. The tracker is a host hook and may not execute generated TypeScript directly.
+
+## Implemented async-frame ABI
+
+A compiler-generated `AsyncFrame` is simultaneously the async invocation's returned `JsPromise`, the object containing locals live across suspension, and the intrusive Promise job queued to resume the state machine. The source Promise links and queues the frame itself, so an await creates neither a wrapper queue node nor an Android `Runnable`.
+
+The synchronous prefix executes through `start()` in the caller's active turn. `suspendOn` and `adoptResult` stage one operation and commit it only after the generated state returns normally. Awaiting an already-settled Promise still resumes through a microtask. Rejection is re-thrown at the await site through `JsThrownValue`, so generated JVM exception edges can preserve `try`/`catch`/`finally` behavior.
+
+The full lowering contract, rejected alternatives, and permanent evidence requirements are normative in [decision 0001](decisions/0001-fused-async-frame.md).
+
+## Decision records
+
+- [0001 — Fuse the async result Promise, continuation frame, and resume job](decisions/0001-fused-async-frame.md)

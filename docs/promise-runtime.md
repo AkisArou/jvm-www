@@ -1,6 +1,6 @@
 # Promise runtime and compiler ABI
 
-Status: first direct-JVM core implemented; async-function lowering is not yet integrated.
+Status: Promise core and fused async-frame ABI implemented; ScriptC async-state emission is not yet integrated end to end.
 
 ## Goals
 
@@ -56,19 +56,43 @@ A rejection enters a per-instance candidate queue. After the outermost host turn
 
 The tracker is deliberately not a user callback. Web `unhandledrejection` or Node `unhandledRejection` compatibility modules must turn the notification into the host task/event behavior defined by their selected profile.
 
-## Async/await integration
+## Fused async-frame ABI
 
-The compiler will generate one continuation object per suspended async invocation. Live-across-await locals become fields; other locals remain JVM locals. The continuation attaches as a Promise reaction and resumes only on the runtime owner. The synchronous prefix runs inside the caller's current host turn, and an already-settled await still resumes through the microtask queue.
+`AsyncFrame` is the compiler-facing state-machine base. One generated instance is simultaneously:
 
-The runtime ABI is ready for this lowering, but the unreachable ScriptC checkpoint recorded in `compiler-checkpoint.md` currently prevents end-to-end emitter integration from a clean remote checkout.
+```text
+returned result Promise
++ live-across-await continuation fields
++ intrusive source-Promise reaction job
++ queued runtime microtask
+```
+
+The synchronous prefix runs through `start()` in the caller's active turn. Generated state zero receives no awaited value. A state that suspends calls `suspendOn(source, nextState)` and returns. The source links the frame itself into its FIFO reaction list, so no wrapper node or `Runnable` is allocated. When the source settles, the same frame runs as a microtask.
+
+Await readers preserve specialization and rejection flow:
+
+```text
+awaitVoid
+awaitNumber
+awaitBoolean
+awaitReference
+```
+
+A rejected source throws `JsThrownValue` at the generated await site. The compiler can therefore emit ordinary JVM exception edges for `try`/`catch`/`finally` across suspension.
+
+A source-level `return promise` uses `adoptResult(source)`. The frame itself becomes the adoption job, preserving asynchronous resolution and first-settle-wins without allocating the generic adoption wrapper.
+
+Suspension/adoption requests are staged and committed only after the generated state returns normally. A state that throws after requesting suspension rejects the frame and is never left subscribed to the source.
+
+The normative rationale and lowering contract are recorded in [decision 0001](decisions/0001-fused-async-frame.md).
 
 ## Current exclusions
 
-The first slice does not claim support for:
+The current runtime does not claim support for:
 
 - dynamic thenable assimilation;
 - `Promise.all`, `race`, `allSettled`, `any`, or `withResolvers`;
-- compiler-generated `async`/`await` state machines;
+- end-to-end ScriptC emission of async state machines;
 - a user-visible `finally` method independent of compiler lowering;
 - Web or Node rejection events;
 - timers or platform Promise adapters.

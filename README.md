@@ -17,7 +17,7 @@ React Native is useful as an API inventory and integration reference. ECMAScript
 
 ## Current slice
 
-The current implementation provides a pure-Java `RuntimeInstance` and Promise core with:
+The current implementation provides a pure-Java `RuntimeInstance`, Promise core, and compiler-facing async-frame ABI with:
 
 - explicit allocation-free outer host-turn entry/exit calls for generated code;
 - one owner thread per runtime instance;
@@ -29,9 +29,11 @@ The current implementation provides a pure-Java `RuntimeInstance` and Promise co
 - asynchronous `then`/`catch` reactions, pass-through handlers, first-settle-wins, and native-Promise adoption;
 - exact arbitrary thrown-value propagation through `JsThrownValue`;
 - checkpoint-based unhandled and later-handled rejection tracking;
+- an `AsyncFrame` whose result Promise, live continuation fields, and resume microtask are one object;
+- wrapper-free sequential awaits and wrapper-free async result adoption;
 - deterministic Java conformance tests plus an executable Node ordering reference.
 
-Compiler lowering for `async`/`await`, dynamic thenable assimilation, Promise combinators, timers, and Web capabilities remain separate incremental slices.
+End-to-end ScriptC lowering, dynamic thenable assimilation, Promise combinators, timers, and Web capabilities remain separate incremental slices.
 
 ## Run the core conformance tests
 
@@ -52,4 +54,4 @@ The intended default is a mobile Web profile:
 - Node-only ordering such as `process.nextTick` is excluded unless an explicit Node-compatibility profile is selected;
 - unsupported shapes fail precisely rather than being silently approximated.
 
-See [`docs/architecture.md`](docs/architecture.md) and the [`Web/API inventory`](docs/web-api-inventory.md).
+See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), and the [`Web/API inventory`](docs/web-api-inventory.md).

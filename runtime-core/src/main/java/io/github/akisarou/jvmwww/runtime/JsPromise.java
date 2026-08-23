@@ -10,10 +10,10 @@ import java.util.Objects;
  * {@link RuntimeInstance}. A platform completion must first enter through
  * {@link RuntimeInstance#admitHostTask(RuntimeTask)} and settle the Promise from that host turn.</p>
  *
- * <p>This first static-profile implementation adopts another {@code JsPromise}. Arbitrary dynamic
+ * <p>This static-profile implementation adopts another {@code JsPromise}. Arbitrary dynamic
  * thenable assimilation is intentionally absent until checked IR admits that shape.</p>
  */
-public final class JsPromise {
+public class JsPromise {
     public static final int STATE_PENDING = 0;
     public static final int STATE_FULFILLED = 1;
     public static final int STATE_REJECTED = 2;
@@ -22,6 +22,17 @@ public final class JsPromise {
     public static final int PAYLOAD_NUMBER = 1;
     public static final int PAYLOAD_BOOLEAN = 2;
     public static final int PAYLOAD_REFERENCE = 3;
+
+    /**
+     * Intrusive Promise job contract shared by generic reactions and generated async frames.
+     *
+     * <p>The link belongs to the job object itself, so a generated frame can be inserted directly
+     * into a Promise's FIFO reaction list without allocating a wrapper node or {@link Runnable}.</p>
+     */
+    interface PromiseJob extends RuntimeTask {
+        PromiseJob getNextPromiseJob();
+        void setNextPromiseJob(PromiseJob next);
+    }
 
     private final RuntimeInstance runtime;
 
@@ -42,60 +53,60 @@ public final class JsPromise {
     private boolean reportedUnhandled;
     private boolean reportedHandled;
 
-    JsPromise(RuntimeInstance runtime) {
+    protected JsPromise(RuntimeInstance runtime) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
     }
 
-    public RuntimeInstance getRuntime() {
+    public final RuntimeInstance getRuntime() {
         return runtime;
     }
 
-    public int getState() {
+    public final int getState() {
         runtime.assertOwnerAccess();
         return state;
     }
 
-    public boolean isPending() {
+    public final boolean isPending() {
         runtime.assertOwnerAccess();
         return state == STATE_PENDING;
     }
 
-    public boolean isFulfilled() {
+    public final boolean isFulfilled() {
         runtime.assertOwnerAccess();
         return state == STATE_FULFILLED;
     }
 
-    public boolean isRejected() {
+    public final boolean isRejected() {
         runtime.assertOwnerAccess();
         return state == STATE_REJECTED;
     }
 
-    public int getPayloadKind() {
+    public final int getPayloadKind() {
         runtime.assertOwnerAccess();
         requireSettled();
         return payloadKind;
     }
 
-    public double getNumberPayload() {
+    public final double getNumberPayload() {
         runtime.assertOwnerAccess();
         requirePayloadKind(PAYLOAD_NUMBER);
         return numberPayload;
     }
 
-    public boolean getBooleanPayload() {
+    public final boolean getBooleanPayload() {
         runtime.assertOwnerAccess();
         requirePayloadKind(PAYLOAD_BOOLEAN);
         return booleanPayload;
     }
 
-    public Object getReferencePayload() {
+    public final Object getReferencePayload() {
         runtime.assertOwnerAccess();
         requirePayloadKind(PAYLOAD_REFERENCE);
         return referencePayload;
     }
 
     /** Converts a rejected Promise's exact reason into the JVM throw carrier used by await. */
-    public JsThrownValue toThrownValue() {
+    public final JsThrownValue toThrownValue() {
         runtime.assertLanguageExecution();
         if (state != STATE_REJECTED) {
             throw new IllegalStateException("Only a rejected Promise has a throw reason");
@@ -121,7 +132,7 @@ public final class JsPromise {
      * settlement. Registration always marks this Promise handled, matching ECMAScript's default
      * thrower reaction for an omitted rejection handler.</p>
      */
-    public JsPromise then(PromiseReaction onFulfilled, PromiseReaction onRejected) {
+    public final JsPromise then(PromiseReaction onFulfilled, PromiseReaction onRejected) {
         runtime.assertLanguageExecution();
         markHandled();
 
@@ -130,11 +141,11 @@ public final class JsPromise {
         return destination;
     }
 
-    public JsPromise catchRejected(PromiseReaction onRejected) {
+    public final JsPromise catchRejected(PromiseReaction onRejected) {
         return then(null, Objects.requireNonNull(onRejected, "onRejected"));
     }
 
-    public boolean fulfillVoid() {
+    public final boolean fulfillVoid() {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -143,7 +154,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean fulfillNumber(double value) {
+    public final boolean fulfillNumber(double value) {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -152,7 +163,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean fulfillBoolean(boolean value) {
+    public final boolean fulfillBoolean(boolean value) {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -161,7 +172,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean fulfillReference(Object value) {
+    public final boolean fulfillReference(Object value) {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -170,7 +181,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean rejectVoid() {
+    public final boolean rejectVoid() {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -179,7 +190,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean rejectNumber(double reason) {
+    public final boolean rejectNumber(double reason) {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -188,7 +199,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean rejectBoolean(boolean reason) {
+    public final boolean rejectBoolean(boolean reason) {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -197,7 +208,7 @@ public final class JsPromise {
         return true;
     }
 
-    public boolean rejectReference(Object reason) {
+    public final boolean rejectReference(Object reason) {
         runtime.assertLanguageExecution();
         if (!lockResolution()) {
             return false;
@@ -207,7 +218,7 @@ public final class JsPromise {
     }
 
     /** Rejects with the exact payload carried by generated Java exception flow. */
-    public boolean rejectThrown(JsThrownValue reason) {
+    public final boolean rejectThrown(JsThrownValue reason) {
         runtime.assertLanguageExecution();
         Objects.requireNonNull(reason, "reason");
         if (!lockResolution()) {
@@ -224,12 +235,10 @@ public final class JsPromise {
      * settled. Calling this method consumes this Promise's one resolve attempt immediately, so a
      * later direct fulfill/reject cannot beat a still-pending adopted Promise.</p>
      */
-    public boolean resolveWith(JsPromise source) {
+    public final boolean resolveWith(JsPromise source) {
         runtime.assertLanguageExecution();
         Objects.requireNonNull(source, "source");
-        if (source.runtime != runtime) {
-            throw new IllegalArgumentException("Cannot adopt a Promise from another RuntimeInstance");
-        }
+        validateSameRuntime(source);
         if (!lockResolution()) {
             return false;
         }
@@ -248,6 +257,58 @@ public final class JsPromise {
         return true;
     }
 
+    /**
+     * Registers a generated async frame as the exact await reaction job.
+     *
+     * <p>Await observes rejection, so the source is marked handled at registration time. The job
+     * itself is linked into the same FIFO as ordinary {@code then} reactions.</p>
+     */
+    final void subscribeAwaiter(PromiseJob job) {
+        runtime.assertLanguageExecution();
+        markHandled();
+        subscribe(Objects.requireNonNull(job, "job"));
+    }
+
+    /**
+     * Locks this Promise and adopts {@code source} using a caller-owned intrusive job.
+     *
+     * <p>This is the no-wrapper path used when an async frame is also its result Promise and the
+     * job that completes adoption. A {@code true} result means the resolve attempt was accepted;
+     * self-resolution may already have rejected the destination instead of subscribing the job.</p>
+     */
+    final boolean beginContinuationAdoption(JsPromise source, PromiseJob job) {
+        runtime.assertLanguageExecution();
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(job, "job");
+        validateSameRuntime(source);
+        if (!lockResolution()) {
+            return false;
+        }
+        if (source == this) {
+            complete(
+                    STATE_REJECTED,
+                    PAYLOAD_REFERENCE,
+                    0.0,
+                    false,
+                    new JsTypeError("Chaining cycle detected for Promise"));
+            return true;
+        }
+
+        source.markHandled();
+        source.subscribe(job);
+        return true;
+    }
+
+    final void completeContinuationAdoption(JsPromise source) {
+        runtime.assertLanguageExecution();
+        completeAdoption(source);
+    }
+
+    final boolean isResolutionLocked() {
+        runtime.assertOwnerAccess();
+        return resolutionLocked;
+    }
+
     boolean isRejectionQueued() {
         return rejectionQueued;
     }
@@ -262,6 +323,12 @@ public final class JsPromise {
 
     void markReportedUnhandled() {
         reportedUnhandled = true;
+    }
+
+    private void validateSameRuntime(JsPromise source) {
+        if (source.runtime != runtime) {
+            throw new IllegalArgumentException("Cannot use a Promise from another RuntimeInstance");
+        }
     }
 
     private void markHandled() {
@@ -284,11 +351,12 @@ public final class JsPromise {
     }
 
     private void subscribe(PromiseJob job) {
+        job.setNextPromiseJob(null);
         if (state == STATE_PENDING) {
             if (reactionsTail == null) {
                 reactionsHead = job;
             } else {
-                reactionsTail.next = job;
+                reactionsTail.setNextPromiseJob(job);
             }
             reactionsTail = job;
         } else {
@@ -379,8 +447,8 @@ public final class JsPromise {
         reactionsHead = null;
         reactionsTail = null;
         while (job != null) {
-            PromiseJob next = job.next;
-            job.next = null;
+            PromiseJob next = job.getNextPromiseJob();
+            job.setNextPromiseJob(null);
             runtime.queueMicrotask(job);
             job = next;
         }
@@ -400,11 +468,21 @@ public final class JsPromise {
         }
     }
 
-    private abstract static class PromiseJob implements RuntimeTask {
-        PromiseJob next;
+    private abstract static class LinkedPromiseJob implements PromiseJob {
+        private PromiseJob next;
+
+        @Override
+        public final PromiseJob getNextPromiseJob() {
+            return next;
+        }
+
+        @Override
+        public final void setNextPromiseJob(PromiseJob next) {
+            this.next = next;
+        }
     }
 
-    private static final class AdoptionJob extends PromiseJob {
+    private static final class AdoptionJob extends LinkedPromiseJob {
         private final JsPromise source;
         private final JsPromise destination;
 
@@ -419,7 +497,7 @@ public final class JsPromise {
         }
     }
 
-    private static final class ReactionJob extends PromiseJob {
+    private static final class ReactionJob extends LinkedPromiseJob {
         private final JsPromise source;
         private final JsPromise destination;
         private final PromiseReaction onFulfilled;

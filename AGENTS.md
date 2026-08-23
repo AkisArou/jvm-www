@@ -1,6 +1,6 @@
 # Working in jvm-www
 
-`jvm-www` is the direct-JVM runtime and Web-capability layer for Native TypeScript. Read `docs/architecture.md` before changing runtime behavior.
+`jvm-www` is the direct-JVM runtime and Web-capability layer for Native TypeScript. Read `docs/architecture.md` and the applicable records under `docs/decisions/` before changing runtime behavior. Decision records are the shared handoff between compiler, runtime, and capability work; do not rely on private chat context.
 
 ## Authority and boundaries
 
@@ -30,6 +30,7 @@
 - Keep hot owner-turn entry/exit paths allocation-free.
 - Use one reusable owner wake callback per runtime instance.
 - Avoid primitive boxing where checked IR can select a specialized ABI.
+- Preserve the accepted fused async-frame ABI unless a new decision record supplies contrary allocation and lifetime evidence.
 - Avoid base64 and repeated byte copies in binary transports unless a compatibility boundary requires them and a test records the cost.
 - Every optimization remains subordinate to observable ordering, cancellation, and error semantics.
 
@@ -46,3 +47,5 @@ Ordering changes require falsifying trace tests. Concurrency changes require a d
 ## Commit discipline
 
 Keep commits small and independently green. Commit messages should state the semantic or performance problem, why the chosen boundary owns it, and the evidence that falsifies likely incorrect alternatives.
+
+When a change establishes a cross-agent architectural contract, add or update a decision record in the same commit. The repository—not a conversation transcript—is the source other agents should consume.
