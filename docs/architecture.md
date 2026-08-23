@@ -1,0 +1,115 @@
+# Architecture
+
+## Semantic authority
+
+The runtime targets a selected TypeScript/JavaScript compatibility profile, not an accidental mixture of Java, Android, Node, and browser behavior.
+
+Priority is:
+
+1. ECMAScript semantics for language facilities such as Promise jobs and async functions;
+2. WHATWG semantics for selected Web APIs;
+3. Native TypeScript's documented static restrictions and precise refusals;
+4. React Native as an API inventory and a useful Android implementation reference.
+
+A Java API with a similar name is not automatically a compatible implementation. `CompletableFuture`, Kotlin coroutines, `java.net.URI`, and Java charset convenience methods may be useful implementation components or adapters, but they do not define JavaScript-observable behavior.
+
+## Runtime/compiler boundary
+
+The compiler owns:
+
+- async-function state-machine lowering;
+- live-across-`await` continuation fields;
+- typed closure and reaction classes;
+- Promise payload specialization selected from checked IR;
+- precise rejection of unsupported source or IR shapes.
+
+`jvm-www` owns:
+
+- the stable Java ABI called by generated continuations;
+- Promise settlement and reaction scheduling;
+- microtask checkpoints and rejection observation;
+- the logical timer heap, timer identifiers, and selected-profile coercion rules;
+- host scheduling and transport interfaces;
+- Web-compatible API state machines and capability implementations.
+
+The Android application target owns:
+
+- attaching a runtime to a `Looper`/`Handler`;
+- supplying a monotonic clock and arming only the earliest runtime deadline;
+- lifecycle and owner-thread assertions;
+- packaging support classes into DEX;
+- app-specific permissions and capability selection.
+
+The Android adapter does not own JavaScript timer semantics. Likewise, an HTTP or WebSocket
+transport does not own Fetch/WebSocket object semantics; transports only execute platform I/O and
+publish copied or retained completions back through the runtime ingress queue.
+
+## Scheduling model
+
+Each `RuntimeInstance` is independent. It has one owner executor, one owner-confined microtask queue, one thread-safe foreign ingress queue, and later its own Promise/timer/error state.
+
+An outer turn is:
+
+```text
+host callback enters
+  -> generated TypeScript runs synchronously
+  -> nested same-owner entries may occur
+  -> outermost entry exits
+  -> microtasks drain FIFO to exhaustion
+  -> rejection checkpoint (future slice)
+  -> control returns to the host executor
+```
+
+Microtasks are never represented as Android `Runnable` objects one-for-one. The runtime posts one reusable wake callback only when work is admitted while idle. Work queued during an active owner turn is consumed by that turn's checkpoint without a post.
+
+Foreign threads can publish transport-safe task objects, but cannot run generated TypeScript or touch owner-confined state.
+
+## Fairness without semantic drift
+
+A host wake may process only a bounded number of independently admitted host tasks before returning to the Looper. Each host task still receives a complete microtask checkpoint before the next host task. A microtask checkpoint itself is never truncated merely to satisfy an Android fairness budget; doing so would change ECMAScript ordering.
+
+Runaway-job protection, if added, must be an explicit resource-limit failure mode rather than silently yielding as though another host task had begun.
+
+## Profiles
+
+The default planned profile is **Web Mobile**:
+
+- ECMAScript Promise and microtask ordering;
+- timers, Fetch, WebSocket, and Android callbacks as host tasks;
+- Web-compatible abort and event objects;
+- no Node-only `process.nextTick`, `ref`, `unref`, or filesystem globals unless separately selected.
+
+An optional Node-compatibility profile may add those APIs later, with their distinct ordering. It must not alias `process.nextTick` to `queueMicrotask`.
+
+## Planned modules
+
+```text
+runtime-core         owner turns, jobs, Promise core, rejection tracking, logical timers
+runtime-testkit      deterministic executor/clock and trace corpus
+runtime-android      Looper/Handler adapter, deadline arming, lifecycle
+web-events           EventTarget, Event, abort algorithms
+web-encoding         TextEncoder/TextDecoder
+web-fetch-core       Headers/Request/Response/body state and transport SPI
+web-fetch-okhttp     optional Android OkHttp transport
+websocket-core       WebSocket state machine and transport SPI
+websocket-okhttp     optional Android OkHttp transport
+web-url              WHATWG-compatible URL and URLSearchParams
+```
+
+Dependencies should point from capability modules toward `runtime-core`, never from `runtime-core`
+toward Android, OkHttp, Kotlin, or another platform library. A dependency such as OkHttp is a
+replaceable transport choice, not part of the public Fetch or WebSocket ABI.
+
+## Performance rules
+
+The design is intended to exploit checked whole-program IR rather than recreate a generic JavaScript VM:
+
+- generated code uses explicit `enterHostTurn`/`leaveHostTurn` calls, avoiding callback wrapper allocation;
+- one reusable owner wake callback exists per runtime instance;
+- Promise reactions are runtime jobs, not one `Runnable` each;
+- primitive payload and continuation specialization belongs at the compiler/runtime ABI boundary;
+- foreign payloads are copied or retained once and decoded on the owner;
+- no periodic polling loop;
+- no JNI transition on the direct Android path.
+
+Every optimization remains subordinate to observable ordering and error behavior.

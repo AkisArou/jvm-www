@@ -1,0 +1,363 @@
+package io.github.akisarou.jvmwww.runtime;
+
+import java.util.ArrayDeque;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Per-instance owner scheduler for generated TypeScript code.
+ *
+ * <p>The class deliberately separates host tasks from microtasks. Android callbacks, timer fires,
+ * network completions, and WebSocket messages enter as host tasks. Promise reactions and
+ * {@code queueMicrotask} callbacks enter the FIFO microtask queue. The queue is drained to
+ * exhaustion only when the outermost host turn exits.</p>
+ *
+ * <p>Generated code should use {@link #enterHostTurn()} and {@link #leaveHostTurn()} in a
+ * {@code try/finally} pair. This avoids allocating a lambda or {@link Runnable} for every Android
+ * callback.</p>
+ */
+public final class RuntimeInstance implements AutoCloseable {
+    public static final int DEFAULT_HOST_TASKS_PER_WAKE = 64;
+
+    private static final int WAKE_IDLE = 0;
+    private static final int WAKE_SCHEDULED_OR_RUNNING = 1;
+
+    private final OwnerExecutor ownerExecutor;
+    private final RuntimeErrorReporter errorReporter;
+    private final int hostTasksPerWake;
+
+    /** Owner-thread-only queue. */
+    private final ArrayDeque<RuntimeTask> microtasks = new ArrayDeque<RuntimeTask>();
+
+    /** Multi-producer, single-consumer ingress queue. */
+    private final ConcurrentLinkedQueue<AdmittedTask> admittedHostTasks =
+            new ConcurrentLinkedQueue<AdmittedTask>();
+
+    /** Coalesces both a scheduled callback and a callback currently draining work. */
+    private final AtomicInteger wakeState = new AtomicInteger(WAKE_IDLE);
+
+    /**
+     * Changes after work publication and before a producer observes {@link #wakeState}. The owner
+     * samples it while releasing a wake so an admission that saw the old scheduled state cannot be
+     * lost even if it races the final queue check.
+     */
+    private final AtomicLong publishedWorkVersion = new AtomicLong();
+    private final AtomicBoolean acceptingHostTasks = new AtomicBoolean(true);
+
+    /** One reusable callback per runtime instance, rather than one allocation per wake. */
+    private final Runnable wakeCallback = new Runnable() {
+        @Override
+        public void run() {
+            runScheduledWake();
+        }
+    };
+
+    /** Owner-thread-only state. */
+    private int hostTurnDepth;
+    private boolean drainingMicrotasks;
+    private volatile boolean closed;
+
+    public RuntimeInstance(OwnerExecutor ownerExecutor, RuntimeErrorReporter errorReporter) {
+        this(ownerExecutor, errorReporter, DEFAULT_HOST_TASKS_PER_WAKE);
+    }
+
+    public RuntimeInstance(
+            OwnerExecutor ownerExecutor,
+            RuntimeErrorReporter errorReporter,
+            int hostTasksPerWake) {
+        this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
+        this.errorReporter = Objects.requireNonNull(errorReporter, "errorReporter");
+        if (hostTasksPerWake < 1) {
+            throw new IllegalArgumentException("hostTasksPerWake must be at least 1");
+        }
+        this.hostTasksPerWake = hostTasksPerWake;
+    }
+
+    /** Begins a host entry turn on the owner thread. Calls may nest. */
+    public void enterHostTurn() {
+        assertOwnerThread();
+        ensureOpen();
+        hostTurnDepth++;
+    }
+
+    /**
+     * Ends a host entry turn and performs a microtask checkpoint after the outermost turn.
+     *
+     * <p>This method must be called from {@code finally} for every successful call to
+     * {@link #enterHostTurn()}.</p>
+     */
+    public void leaveHostTurn() {
+        assertOwnerThread();
+        if (hostTurnDepth == 0) {
+            throw new IllegalStateException("leaveHostTurn called without a matching enterHostTurn");
+        }
+
+        hostTurnDepth--;
+        if (hostTurnDepth == 0 && !drainingMicrotasks && !closed) {
+            drainMicrotasksToExhaustion();
+        }
+    }
+
+    /**
+     * Appends a microtask on the owner thread.
+     *
+     * <p>Enqueuing during an active turn or checkpoint performs no owner post. Enqueuing while the
+     * runtime is idle requests one coalesced wake so the checkpoint can run.</p>
+     */
+    public void queueMicrotask(RuntimeTask task) {
+        assertOwnerThread();
+        ensureOpen();
+        microtasks.addLast(Objects.requireNonNull(task, "task"));
+
+        if (hostTurnDepth == 0 && !drainingMicrotasks) {
+            publishWakeWork();
+            requestOwnerWake();
+        }
+    }
+
+    /**
+     * Admits a copied or retained host event from any thread.
+     *
+     * <p>The task is never executed by the calling foreign thread. A burst admitted while idle
+     * produces one coalesced owner post. The return value is false when the runtime no longer
+     * accepts work; in that case the task has been discarded.</p>
+     */
+    public boolean admitHostTask(RuntimeTask task) {
+        Objects.requireNonNull(task, "task");
+
+        if (!acceptingHostTasks.get()) {
+            discardTask(task);
+            return false;
+        }
+
+        AdmittedTask admittedTask = new AdmittedTask(task);
+        admittedHostTasks.add(admittedTask);
+
+        // Close can race between the first check and publication. Remove our exact queue node when
+        // possible; otherwise close has already taken responsibility for discarding it.
+        if (!acceptingHostTasks.get()) {
+            if (admittedHostTasks.remove(admittedTask)) {
+                discardTask(task);
+            }
+            return false;
+        }
+
+        publishWakeWork();
+        requestOwnerWake();
+        return true;
+    }
+
+    public boolean isOwnerThread() {
+        return ownerExecutor.isOwnerThread();
+    }
+
+    public boolean isInsideHostTurn() {
+        assertOwnerThread();
+        return hostTurnDepth != 0;
+    }
+
+    public boolean isDrainingMicrotasks() {
+        assertOwnerThread();
+        return drainingMicrotasks;
+    }
+
+    public boolean isClosed() {
+        return closed;
+    }
+
+    /**
+     * Stops admission and discards queued work. A callback already posted to the owner may still
+     * arrive, but it becomes a no-op.
+     */
+    @Override
+    public void close() {
+        assertOwnerThread();
+        if (closed) {
+            return;
+        }
+        if (hostTurnDepth != 0 || drainingMicrotasks) {
+            throw new IllegalStateException("RuntimeInstance cannot close during an active turn");
+        }
+
+        acceptingHostTasks.set(false);
+        closed = true;
+
+        AdmittedTask admittedTask;
+        while ((admittedTask = admittedHostTasks.poll()) != null) {
+            discardTask(admittedTask.task);
+        }
+        RuntimeTask task;
+        while ((task = microtasks.pollFirst()) != null) {
+            discardTask(task);
+        }
+
+        // A previously posted callback cannot necessarily be removed from the host executor. It
+        // will observe closed and return. Resetting allows no future admission because accepting is
+        // already false.
+        wakeState.set(WAKE_IDLE);
+    }
+
+    private void runScheduledWake() {
+        assertOwnerThread();
+
+        try {
+            if (closed) {
+                return;
+            }
+
+            int processed = 0;
+            AdmittedTask admittedTask;
+            while (processed < hostTasksPerWake
+                    && (admittedTask = admittedHostTasks.poll()) != null) {
+                executeHostTask(admittedTask.task);
+                processed++;
+                if (closed) {
+                    return;
+                }
+            }
+
+            // queueMicrotask may have been called while the owner was idle. Entering and leaving an
+            // empty host turn establishes the required checkpoint without representing a microtask
+            // as a host task.
+            if (processed == 0 && !microtasks.isEmpty()) {
+                enterHostTurn();
+                leaveHostTurn();
+            }
+        } finally {
+            // Lost-wake avoidance has three producer cases:
+            // 1. publication before this sample is visible through the version read;
+            // 2. publication before IDLE but after this sample changes the second version read;
+            // 3. publication after IDLE posts the wake itself.
+            long versionBeforeIdle = publishedWorkVersion.get();
+            wakeState.set(WAKE_IDLE);
+            boolean pending = hasPendingWakeWork();
+            long versionAfterCheck = publishedWorkVersion.get();
+            if (!closed && (pending || versionAfterCheck != versionBeforeIdle)) {
+                requestOwnerWake();
+            }
+        }
+    }
+
+    private void executeHostTask(RuntimeTask task) {
+        enterHostTurn();
+        try {
+            task.execute(this);
+        } catch (Throwable error) {
+            rethrowIfFatal(error);
+            report(RuntimeErrorPhase.HOST_TASK, error);
+        } finally {
+            leaveHostTurn();
+        }
+    }
+
+    private void drainMicrotasksToExhaustion() {
+        drainingMicrotasks = true;
+        try {
+            RuntimeTask task;
+            while ((task = microtasks.pollFirst()) != null) {
+                try {
+                    task.execute(this);
+                } catch (Throwable error) {
+                    rethrowIfFatal(error);
+                    report(RuntimeErrorPhase.MICROTASK, error);
+                }
+            }
+        } finally {
+            drainingMicrotasks = false;
+        }
+    }
+
+    private void publishWakeWork() {
+        publishedWorkVersion.incrementAndGet();
+    }
+
+    private void requestOwnerWake() {
+        if (closed) {
+            return;
+        }
+        if (wakeState.compareAndSet(WAKE_IDLE, WAKE_SCHEDULED_OR_RUNNING)) {
+            try {
+                ownerExecutor.post(wakeCallback);
+            } catch (RuntimeException error) {
+                wakeState.set(WAKE_IDLE);
+                throw error;
+            } catch (Error error) {
+                wakeState.set(WAKE_IDLE);
+                throw error;
+            }
+        }
+    }
+
+    private boolean hasPendingWakeWork() {
+        // microtasks is owner-confined and this method is only called by the owner callback.
+        return !admittedHostTasks.isEmpty() || !microtasks.isEmpty();
+    }
+
+    private void discardTask(RuntimeTask task) {
+        try {
+            task.discard();
+        } catch (Throwable error) {
+            rethrowIfFatal(error);
+            report(RuntimeErrorPhase.DISCARD, error);
+        }
+    }
+
+    private void report(RuntimeErrorPhase phase, Throwable error) {
+        try {
+            errorReporter.report(this, phase, error);
+        } catch (Throwable reporterFailure) {
+            rethrowIfFatal(reporterFailure);
+            // A broken reporting hook must not strand the scheduler in a half-drained state. Keep
+            // the original failure available to diagnostics without making the hook recursive.
+            if (reporterFailure != error) {
+                error.addSuppressed(reporterFailure);
+            }
+            Thread current = Thread.currentThread();
+            Thread.UncaughtExceptionHandler handler = current.getUncaughtExceptionHandler();
+            if (handler != null) {
+                try {
+                    handler.uncaughtException(current, error);
+                } catch (Throwable handlerFailure) {
+                    rethrowIfFatal(handlerFailure);
+                    // The scheduler must remain structurally valid even when both reporting hooks
+                    // are broken. There is no safe third callback to invoke here.
+                }
+            }
+        }
+    }
+
+    private static void rethrowIfFatal(Throwable error) {
+        if (error instanceof ThreadDeath) {
+            throw (ThreadDeath) error;
+        }
+        if (error instanceof VirtualMachineError) {
+            throw (VirtualMachineError) error;
+        }
+        if (error instanceof LinkageError) {
+            throw (LinkageError) error;
+        }
+    }
+
+    private void assertOwnerThread() {
+        if (!ownerExecutor.isOwnerThread()) {
+            throw new IllegalStateException("RuntimeInstance accessed outside its owner thread");
+        }
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("RuntimeInstance is closed");
+        }
+    }
+
+    private static final class AdmittedTask {
+        final RuntimeTask task;
+
+        AdmittedTask(RuntimeTask task) {
+            this.task = task;
+        }
+    }
+}

@@ -1,0 +1,41 @@
+# Compiler integration checkpoint
+
+Status checked: 2026-08-23.
+
+The Native TypeScript parent repository at `3ff5680d43a96679170d54b723ceb61a6de00a90`
+points its `third_party/scriptc` gitlink at:
+
+```text
+7759153c975ac56ce1bfe3b642736228de03af23
+```
+
+At the time of this check, GitHub did not resolve that object from the public
+`AkisArou/scriptc` remote. The visible `native-typescript` branch was at
+`5628346e56dcae419390ab15db9b464df13ad160`, and the direct-JVM checkpoint
+referenced by the parent could not be fetched by SHA.
+
+This does not block the standalone Java scheduling and Web-capability work in
+`jvm-www`. It does mean end-to-end compiler integration and regression testing
+cannot be reproduced from remote checkouts until the pinned ScriptC commit is
+restored or another reachable checkpoint containing the same JVM emitter work
+is supplied.
+
+The first ABI intentionally avoids committing to a Promise object layout. The
+scheduler entry points are:
+
+```java
+runtime.enterHostTurn();
+try {
+    // generated synchronous body or platform callback
+} finally {
+    runtime.leaveHostTurn();
+}
+
+runtime.queueMicrotask(generatedRuntimeTask);
+runtime.admitHostTask(copiedPlatformCompletion);
+```
+
+Promise representation and async continuation methods should be added only
+after reviewing the reachable checked IR and JVM emitter. That lets payload and
+continuation specialization follow actual compiler types instead of guessing a
+generic boxed design.
