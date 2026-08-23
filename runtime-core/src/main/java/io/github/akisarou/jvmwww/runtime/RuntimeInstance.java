@@ -27,10 +27,13 @@ public final class RuntimeInstance implements AutoCloseable {
 
     private final OwnerExecutor ownerExecutor;
     private final RuntimeErrorReporter errorReporter;
+    private final PromiseRejectionTracker rejectionTracker;
     private final int hostTasksPerWake;
 
-    /** Owner-thread-only queue. */
+    /** Owner-thread-only queues. */
     private final ArrayDeque<RuntimeTask> microtasks = new ArrayDeque<RuntimeTask>();
+    private final ArrayDeque<JsPromise> unhandledRejectionCandidates =
+            new ArrayDeque<JsPromise>();
 
     /** Multi-producer, single-consumer ingress queue. */
     private final ConcurrentLinkedQueue<AdmittedTask> admittedHostTasks =
@@ -61,19 +64,45 @@ public final class RuntimeInstance implements AutoCloseable {
     private volatile boolean closed;
 
     public RuntimeInstance(OwnerExecutor ownerExecutor, RuntimeErrorReporter errorReporter) {
-        this(ownerExecutor, errorReporter, DEFAULT_HOST_TASKS_PER_WAKE);
+        this(
+                ownerExecutor,
+                errorReporter,
+                PromiseRejectionTracker.NONE,
+                DEFAULT_HOST_TASKS_PER_WAKE);
     }
 
     public RuntimeInstance(
             OwnerExecutor ownerExecutor,
             RuntimeErrorReporter errorReporter,
             int hostTasksPerWake) {
+        this(ownerExecutor, errorReporter, PromiseRejectionTracker.NONE, hostTasksPerWake);
+    }
+
+    public RuntimeInstance(
+            OwnerExecutor ownerExecutor,
+            RuntimeErrorReporter errorReporter,
+            PromiseRejectionTracker rejectionTracker) {
+        this(ownerExecutor, errorReporter, rejectionTracker, DEFAULT_HOST_TASKS_PER_WAKE);
+    }
+
+    public RuntimeInstance(
+            OwnerExecutor ownerExecutor,
+            RuntimeErrorReporter errorReporter,
+            PromiseRejectionTracker rejectionTracker,
+            int hostTasksPerWake) {
         this.ownerExecutor = Objects.requireNonNull(ownerExecutor, "ownerExecutor");
         this.errorReporter = Objects.requireNonNull(errorReporter, "errorReporter");
+        this.rejectionTracker = Objects.requireNonNull(rejectionTracker, "rejectionTracker");
         if (hostTasksPerWake < 1) {
             throw new IllegalArgumentException("hostTasksPerWake must be at least 1");
         }
         this.hostTasksPerWake = hostTasksPerWake;
+    }
+
+    /** Allocates a pending Promise owned by this runtime. */
+    public JsPromise newPromise() {
+        assertLanguageExecution();
+        return new JsPromise(this);
     }
 
     /** Begins a host entry turn on the owner thread. Calls may nest. */
@@ -98,6 +127,7 @@ public final class RuntimeInstance implements AutoCloseable {
         hostTurnDepth--;
         if (hostTurnDepth == 0 && !drainingMicrotasks && !closed) {
             drainMicrotasksToExhaustion();
+            reportUnhandledRejections();
         }
     }
 
@@ -193,6 +223,10 @@ public final class RuntimeInstance implements AutoCloseable {
         while ((task = microtasks.pollFirst()) != null) {
             discardTask(task);
         }
+        JsPromise promise;
+        while ((promise = unhandledRejectionCandidates.pollFirst()) != null) {
+            promise.setRejectionQueued(false);
+        }
 
         // A previously posted callback cannot necessarily be removed from the host executor. It
         // will observe closed and return. Resetting allows no future admission because accepting is
@@ -270,6 +304,43 @@ public final class RuntimeInstance implements AutoCloseable {
         }
     }
 
+    void notePromiseRejected(JsPromise promise) {
+        assertLanguageExecution();
+        if (!promise.isRejectionQueued()) {
+            promise.setRejectionQueued(true);
+            unhandledRejectionCandidates.addLast(promise);
+        }
+    }
+
+    void notifyPromiseHandled(JsPromise promise) {
+        assertLanguageExecution();
+        notifyRejectionTracker(false, promise);
+    }
+
+    private void reportUnhandledRejections() {
+        JsPromise promise;
+        while ((promise = unhandledRejectionCandidates.pollFirst()) != null) {
+            promise.setRejectionQueued(false);
+            if (promise.shouldReportUnhandled()) {
+                promise.markReportedUnhandled();
+                notifyRejectionTracker(true, promise);
+            }
+        }
+    }
+
+    private void notifyRejectionTracker(boolean unhandled, JsPromise promise) {
+        try {
+            if (unhandled) {
+                rejectionTracker.onUnhandled(this, promise);
+            } else {
+                rejectionTracker.onHandled(this, promise);
+            }
+        } catch (Throwable error) {
+            rethrowIfFatal(error);
+            report(RuntimeErrorPhase.REJECTION_TRACKER, error);
+        }
+    }
+
     private void publishWakeWork() {
         publishedWorkVersion.incrementAndGet();
     }
@@ -329,7 +400,7 @@ public final class RuntimeInstance implements AutoCloseable {
         }
     }
 
-    private static void rethrowIfFatal(Throwable error) {
+    static void rethrowIfFatal(Throwable error) {
         if (error instanceof ThreadDeath) {
             throw (ThreadDeath) error;
         }
@@ -338,6 +409,19 @@ public final class RuntimeInstance implements AutoCloseable {
         }
         if (error instanceof LinkageError) {
             throw (LinkageError) error;
+        }
+    }
+
+    void assertOwnerAccess() {
+        assertOwnerThread();
+        ensureOpen();
+    }
+
+    void assertLanguageExecution() {
+        assertOwnerAccess();
+        if (hostTurnDepth == 0 && !drainingMicrotasks) {
+            throw new IllegalStateException(
+                    "Language runtime operation requires an active host turn or microtask");
         }
     }
 

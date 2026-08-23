@@ -14,3 +14,29 @@ mapfile -d '' SOURCES < <(
 
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror -d "$OUT" "${SOURCES[@]}"
 java -cp "$OUT" io.github.akisarou.jvmwww.testkit.RuntimeInstanceConformance
+java -cp "$OUT" io.github.akisarou.jvmwww.testkit.PromiseConformance
+
+promise_job_shape="$(
+  javap -classpath "$OUT" -p \
+    'io.github.akisarou.jvmwww.runtime.JsPromise$PromiseJob'
+)"
+if [[ "$promise_job_shape" != *"implements io.github.akisarou.jvmwww.runtime.RuntimeTask"* ]] || \
+   [[ "$promise_job_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'Promise jobs must be RuntimeTask values, never one Runnable per reaction\n' >&2
+  exit 1
+fi
+if javap -classpath "$OUT" -verbose io.github.akisarou.jvmwww.runtime.JsPromise | \
+   grep -Eq 'CompletableFuture|kotlinx/coroutines'; then
+  printf 'Forbidden future/coroutine dependency in Promise core\n' >&2
+  exit 1
+fi
+
+if command -v node >/dev/null 2>&1; then
+  reference_trace="$(node "$ROOT/conformance/reference/promise-ordering.mjs")"
+  expected_trace="sync,end,microtask,promise,nested"
+  if [[ "$reference_trace" != "$expected_trace" ]]; then
+    printf 'Node Promise ordering drift: expected %s, got %s\n' \
+      "$expected_trace" "$reference_trace" >&2
+    exit 1
+  fi
+fi

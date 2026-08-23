@@ -4,5 +4,6 @@ package io.github.akisarou.jvmwww.runtime;
 public enum RuntimeErrorPhase {
     HOST_TASK,
     MICROTASK,
+    REJECTION_TRACKER,
     DISCARD
 }

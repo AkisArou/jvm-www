@@ -46,7 +46,7 @@ publish copied or retained completions back through the runtime ingress queue.
 
 ## Scheduling model
 
-Each `RuntimeInstance` is independent. It has one owner executor, one owner-confined microtask queue, one thread-safe foreign ingress queue, and later its own Promise/timer/error state.
+Each `RuntimeInstance` is independent. It has one owner executor, one owner-confined microtask queue, one thread-safe foreign ingress queue, Promise/rejection state, and later its own logical timer state.
 
 An outer turn is:
 
@@ -56,7 +56,7 @@ host callback enters
   -> nested same-owner entries may occur
   -> outermost entry exits
   -> microtasks drain FIFO to exhaustion
-  -> rejection checkpoint (future slice)
+  -> unhandled-rejection checkpoint
   -> control returns to the host executor
 ```
 
@@ -113,3 +113,32 @@ The design is intended to exploit checked whole-program IR rather than recreate 
 - no JNI transition on the direct Android path.
 
 Every optimization remains subordinate to observable ordering and error behavior.
+
+## Implemented Promise ABI
+
+The first Promise slice uses one owner-confined `JsPromise` object with an integer state and
+specialized payload slots. It does not use Java generics to carry language values:
+
+```text
+state:        pending | fulfilled | rejected
+payload kind: void | number | boolean | reference
+double numberPayload
+boolean booleanPayload
+Object referencePayload
+```
+
+`then` registration creates one runtime reaction job, not one executor `Runnable`. A settled
+source queues that job; it never invokes the handler inline. Missing handlers copy the source
+settlement into the destination. Generated handlers resolve the destination directly, which lets
+the compiler preserve primitive specialization and select native-Promise adoption without a
+boxed generic return object.
+
+A resolve/reject attempt locks the Promise immediately. Adoption of a pending Promise therefore
+prevents a later direct settlement from winning. Adoption itself resumes through the microtask
+queue even when the source is already settled. Dynamic thenable assimilation remains a precise
+unsupported shape until the checked IR can represent it.
+
+Unhandled rejection candidates are recorded per runtime and observed after a complete microtask
+checkpoint. Attaching any `then` reaction marks the source handled, including the default thrower
+created by an omitted rejection callback; a propagated rejection belongs to the destination
+Promise. The tracker is a host hook and may not execute generated TypeScript directly.

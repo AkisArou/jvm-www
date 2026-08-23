@@ -17,22 +17,25 @@ React Native is useful as an API inventory and integration reference. ECMAScript
 
 ## Current slice
 
-The first implementation slice provides a pure-Java `RuntimeInstance` with:
+The current implementation provides a pure-Java `RuntimeInstance` and Promise core with:
 
 - explicit allocation-free outer host-turn entry/exit calls for generated code;
 - one owner thread per runtime instance;
 - FIFO microtasks drained to exhaustion after the outermost turn;
 - no owner wake when a microtask is queued during an active turn;
-- thread-safe foreign host-task admission;
-- one coalesced owner wake for an idle admission burst;
+- thread-safe foreign host-task admission and one coalesced idle wake;
 - a host-task fairness budget without truncating a microtask checkpoint;
-- deterministic, dependency-free conformance tests.
+- unboxed Promise payload slots for number, boolean, reference, and void;
+- asynchronous `then`/`catch` reactions, pass-through handlers, first-settle-wins, and native-Promise adoption;
+- exact arbitrary thrown-value propagation through `JsThrownValue`;
+- checkpoint-based unhandled and later-handled rejection tracking;
+- deterministic Java conformance tests plus an executable Node ordering reference.
 
-It deliberately does **not** implement Promise yet. The scheduler contract is the foundation that Promise reactions and compiler-generated async continuations will use.
+Compiler lowering for `async`/`await`, dynamic thenable assimilation, Promise combinators, timers, and Web capabilities remain separate incremental slices.
 
 ## Run the core conformance tests
 
-A JDK is the only requirement:
+A JDK is the only requirement. When Node is present, the test script also verifies the reference Promise ordering trace:
 
 ```sh
 ./scripts/test-core.sh
