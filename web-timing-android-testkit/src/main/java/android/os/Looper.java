@@ -1,10 +1,11 @@
 package android.os;
 
-/** Minimal deterministic owner identity used only by web-timing-android-testkit. */
+/** Minimal deterministic owner identity and queue used only by web-timing-android-testkit. */
 public final class Looper {
     private static final ThreadLocal<Looper> CURRENT = new ThreadLocal<Looper>();
 
     private final Thread ownerThread = Thread.currentThread();
+    private final MessageQueue queue = new MessageQueue(this);
 
     private Looper() {}
 
@@ -17,6 +18,14 @@ public final class Looper {
 
     public static Looper myLooper() {
         return CURRENT.get();
+    }
+
+    public static MessageQueue myQueue() {
+        Looper looper = CURRENT.get();
+        if (looper == null) {
+            throw new NullPointerException("Current thread has no Looper");
+        }
+        return looper.queue;
     }
 
     public Thread getThread() {
