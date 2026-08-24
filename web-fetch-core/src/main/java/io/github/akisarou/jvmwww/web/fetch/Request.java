@@ -2,6 +2,8 @@ package io.github.akisarou.jvmwww.web.fetch;
 
 import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
+import io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot;
+import io.github.akisarou.jvmwww.web.bodies.BufferedBodySource;
 import io.github.akisarou.jvmwww.web.events.AbortSignal;
 import io.github.akisarou.jvmwww.web.url.URL;
 import java.util.Locale;
@@ -14,7 +16,7 @@ public final class Request {
     private final String transportUrl;
     private final String method;
     private final Headers headers;
-    private final byte[] body;
+    private final BufferedBodySnapshot body;
     private final AbortSignal signal;
 
     public Request(RuntimeInstance runtime, String url) {
@@ -22,7 +24,7 @@ public final class Request {
     }
 
     public Request(RuntimeInstance runtime, URL url) {
-        this(runtime, url, "GET", null, null, null);
+        this(runtime, url, "GET", null, null, null, null);
     }
 
     public Request(
@@ -38,6 +40,7 @@ public final class Request {
                 method,
                 headers,
                 body,
+                null,
                 signal);
     }
 
@@ -47,6 +50,58 @@ public final class Request {
             String method,
             Headers headers,
             byte[] body,
+            AbortSignal signal) {
+        this(runtime, url, method, headers, body, null, signal);
+    }
+
+    /**
+     * Creates a Request by capturing one immutable Blob, File, FormData, or custom body snapshot.
+     *
+     * <p>The named factory avoids a Java overload ambiguity between {@code byte[]} and
+     * {@link BufferedBodySource} when a generated call passes a null body.</p>
+     */
+    public static Request withBody(
+            RuntimeInstance runtime,
+            String url,
+            String method,
+            Headers headers,
+            BufferedBodySource body,
+            AbortSignal signal) {
+        return new Request(
+                runtime,
+                new URL(runtime, Objects.requireNonNull(url, "url")),
+                method,
+                headers,
+                null,
+                Objects.requireNonNull(body, "body"),
+                signal);
+    }
+
+    /** URL-object variant of the buffered body snapshot constructor. */
+    public static Request withBody(
+            RuntimeInstance runtime,
+            URL url,
+            String method,
+            Headers headers,
+            BufferedBodySource body,
+            AbortSignal signal) {
+        return new Request(
+                runtime,
+                url,
+                method,
+                headers,
+                null,
+                Objects.requireNonNull(body, "body"),
+                signal);
+    }
+
+    private Request(
+            RuntimeInstance runtime,
+            URL url,
+            String method,
+            Headers headers,
+            byte[] byteBody,
+            BufferedBodySource bodySource,
             AbortSignal signal) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         FetchRuntimeChecks.assertLanguageExecution(runtime);
@@ -60,9 +115,12 @@ public final class Request {
         this.url = checkedUrl.getHref();
         this.transportUrl = excludeFragment(this.url);
         this.method = normalizeMethod(method == null ? "GET" : method);
-        if (("GET".equals(this.method) || "HEAD".equals(this.method)) && body != null) {
+
+        boolean hasBody = byteBody != null || bodySource != null;
+        if (("GET".equals(this.method) || "HEAD".equals(this.method)) && hasBody) {
             throw new JsTypeError("GET/HEAD request cannot have a body");
         }
+
         if (headers == null) {
             this.headers = new Headers(runtime);
         } else {
@@ -74,7 +132,27 @@ public final class Request {
         if (signal != null && signal.getRuntime() != runtime) {
             throw new IllegalArgumentException("Request signal belongs to another RuntimeInstance");
         }
-        this.body = body == null ? null : body.clone();
+
+        BufferedBodySnapshot capturedBody = null;
+        if (bodySource != null) {
+            if (bodySource.getRuntime() != runtime) {
+                throw new IllegalArgumentException("Request body belongs to another RuntimeInstance");
+            }
+            capturedBody = Objects.requireNonNull(
+                    bodySource.snapshot(),
+                    "BufferedBodySource.snapshot returned null");
+        } else if (byteBody != null) {
+            capturedBody = BufferedBodySnapshot.copyOf(byteBody, null);
+        }
+        if (capturedBody != null) {
+            String inferredContentType = capturedBody.getContentType();
+            if (inferredContentType != null
+                    && !inferredContentType.isEmpty()
+                    && !this.headers.has("content-type")) {
+                this.headers.append("content-type", inferredContentType);
+            }
+        }
+        this.body = capturedBody;
         this.signal = signal;
     }
 
@@ -107,9 +185,9 @@ public final class Request {
         return transportUrl;
     }
 
-    byte[] copyBodyForTransport() {
+    BufferedBodySnapshot bodySnapshotForTransport() {
         assertAccess();
-        return body == null ? null : body.clone();
+        return body;
     }
 
     private void assertAccess() {

@@ -6,7 +6,9 @@ dependencies {
     implementation(project(":runtime-core"))
     implementation(project(":runtime-testkit"))
     implementation(project(":web-events"))
+    implementation(project(":web-encoding"))
     implementation(project(":web-url"))
+    implementation(project(":web-bodies"))
     implementation(project(":web-fetch-core"))
 }
 

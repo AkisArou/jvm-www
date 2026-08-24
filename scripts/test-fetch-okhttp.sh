@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
-mkdir -p "$OUT/core" "$OUT/events" "$OUT/encoding" "$OUT/url" "$OUT/fetch" "$OUT/okhttp"
+mkdir -p "$OUT/core" "$OUT/events" "$OUT/encoding" "$OUT/url" "$OUT/bodies" "$OUT/fetch" "$OUT/okhttp"
 
 mapfile -d '' CORE_SOURCES < <(
   find "$ROOT/runtime-core/src/main/java" "$ROOT/runtime-testkit/src/main/java" \
@@ -31,24 +31,33 @@ mapfile -d '' URL_SOURCES < <(
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
   -cp "$OUT/core:$OUT/encoding" -d "$OUT/url" "${URL_SOURCES[@]}"
 
+mapfile -d '' BODY_SOURCES < <(
+  find "$ROOT/web-bodies/src/main/java" -name '*.java' -print0 | sort -z
+)
+javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
+  -cp "$OUT/core:$OUT/encoding" -d "$OUT/bodies" "${BODY_SOURCES[@]}"
+
 mapfile -d '' FETCH_SOURCES < <(
   find "$ROOT/web-fetch-core/src/main/java" -name '*.java' -print0 | sort -z
 )
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
-  -cp "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url" -d "$OUT/fetch" "${FETCH_SOURCES[@]}"
+  -cp "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/bodies" \
+  -d "$OUT/fetch" "${FETCH_SOURCES[@]}"
 
 mapfile -d '' OKHTTP_SOURCES < <(
   find "$ROOT/web-fetch-okhttp/src/main/java" \
        "$ROOT/web-fetch-okhttp-testkit/src/main/java" \
     -name '*.java' -print0 | sort -z
 )
+OKHTTP_CP="$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/bodies:$OUT/fetch:$OUT/okhttp"
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
-  -cp "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/fetch" -d "$OUT/okhttp" "${OKHTTP_SOURCES[@]}"
-java -cp "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/fetch:$OUT/okhttp" \
+  -cp "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/bodies:$OUT/fetch" \
+  -d "$OUT/okhttp" "${OKHTTP_SOURCES[@]}"
+java -cp "$OKHTTP_CP" \
   io.github.akisarou.jvmwww.web.fetch.okhttp.testkit.OkHttpFetchTransportConformance
 
 bridge_shape="$(
-  javap -classpath "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/fetch:$OUT/okhttp" -p \
+  javap -classpath "$OKHTTP_CP" -p \
     'io.github.akisarou.jvmwww.web.fetch.okhttp.OkHttpFetchTransport$OkHttpFetchCall'
 )"
 if [[ "$bridge_shape" != *"implements okhttp3.Callback"* ]] || \
@@ -59,7 +68,7 @@ if [[ "$bridge_shape" != *"implements okhttp3.Callback"* ]] || \
 fi
 
 transport_verbose="$(
-  javap -classpath "$OUT/core:$OUT/events:$OUT/encoding:$OUT/url:$OUT/fetch:$OUT/okhttp" -verbose \
+  javap -classpath "$OKHTTP_CP" -verbose \
     io.github.akisarou.jvmwww.web.fetch.okhttp.OkHttpFetchTransport \
     'io.github.akisarou.jvmwww.web.fetch.okhttp.OkHttpFetchTransport$OkHttpFetchCall'
 )"

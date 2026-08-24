@@ -4,6 +4,8 @@ import io.github.akisarou.jvmwww.runtime.JsPromise;
 import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.runtime.RuntimeTask;
+import io.github.akisarou.jvmwww.web.bodies.Blob;
+import io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot;
 import io.github.akisarou.jvmwww.web.encoding.TextDecoder;
 import io.github.akisarou.jvmwww.web.url.URL;
 
@@ -14,7 +16,7 @@ public final class Response {
     private final int status;
     private final String statusText;
     private final Headers headers;
-    private final byte[] body;
+    private final BufferedBodySnapshot body;
     private final boolean redirected;
     private boolean bodyUsed;
 
@@ -30,7 +32,7 @@ public final class Response {
                         transport.copyHeaderNames(),
                         transport.copyHeaderValues(),
                         true);
-        this.body = transport.copyBody();
+        this.body = BufferedBodySnapshot.fromOwnedBytes(transport.copyBody(), null);
         this.redirected = transport.isRedirected();
     }
 
@@ -46,22 +48,34 @@ public final class Response {
     /** Returns a Promise fulfilled with an independent byte[] copy after one microtask hop. */
     public JsPromise arrayBuffer() {
         assertAccess();
-        return startBodyRead(BodyReadPromise.KIND_BYTES);
+        return startBodyRead(BodyReadPromise.KIND_BYTES, null);
+    }
+
+    /** Selected-profile byte-array projection of Fetch Body.bytes(). */
+    public JsPromise bytes() {
+        assertAccess();
+        return startBodyRead(BodyReadPromise.KIND_BYTES, null);
     }
 
     /** Fetch text decoding is the exact UTF-8 replacement algorithm from web-encoding. */
     public JsPromise text() {
         assertAccess();
-        return startBodyRead(BodyReadPromise.KIND_TEXT);
+        return startBodyRead(BodyReadPromise.KIND_TEXT, null);
     }
 
-    private JsPromise startBodyRead(int kind) {
+    /** Returns a Blob sharing the immutable response snapshot without another full byte copy. */
+    public JsPromise blob() {
+        assertAccess();
+        return startBodyRead(BodyReadPromise.KIND_BLOB, FetchMimeType.extract(headers));
+    }
+
+    private JsPromise startBodyRead(int kind, String blobType) {
         BodyReadPromise promise;
         if (bodyUsed) {
-            promise = new BodyReadPromise(runtime, null, kind, true);
+            promise = new BodyReadPromise(runtime, null, kind, true, blobType);
         } else {
             bodyUsed = true;
-            promise = new BodyReadPromise(runtime, body, kind, false);
+            promise = new BodyReadPromise(runtime, body, kind, false, blobType);
         }
         runtime.queueMicrotask(promise);
         return promise;
@@ -79,16 +93,24 @@ public final class Response {
     private static final class BodyReadPromise extends JsPromise implements RuntimeTask {
         static final int KIND_BYTES = 1;
         static final int KIND_TEXT = 2;
+        static final int KIND_BLOB = 3;
 
-        private byte[] bytes;
+        private BufferedBodySnapshot body;
         private final int kind;
         private final boolean unusable;
+        private final String blobType;
 
-        BodyReadPromise(RuntimeInstance runtime, byte[] bytes, int kind, boolean unusable) {
+        BodyReadPromise(
+                RuntimeInstance runtime,
+                BufferedBodySnapshot body,
+                int kind,
+                boolean unusable,
+                String blobType) {
             super(runtime);
-            this.bytes = bytes;
+            this.body = body;
             this.kind = kind;
             this.unusable = unusable;
+            this.blobType = blobType;
         }
 
         @Override
@@ -97,20 +119,33 @@ public final class Response {
                 rejectReference(new JsTypeError("Response body is already used"));
                 return;
             }
-            byte[] captured = bytes;
-            bytes = null;
-            if (kind == KIND_BYTES) {
-                fulfillReference(captured.clone());
-            } else if (kind == KIND_TEXT) {
-                fulfillReference(new TextDecoder(runtime).decode(captured));
-            } else {
-                throw new AssertionError("Unknown response body read kind: " + kind);
+            BufferedBodySnapshot captured = body;
+            body = null;
+            try {
+                if (kind == KIND_BYTES) {
+                    fulfillReference(captured.copyBytes());
+                } else if (kind == KIND_TEXT) {
+                    fulfillReference(new TextDecoder(runtime).decode(captured.copyBytes()));
+                } else if (kind == KIND_BLOB) {
+                    fulfillReference(Blob.fromSnapshot(runtime, captured, blobType));
+                } else {
+                    throw new AssertionError("Unknown response body read kind: " + kind);
+                }
+            } catch (Throwable error) {
+                rethrowIfFatal(error);
+                rejectReference(error);
             }
         }
 
         @Override
         public void discard() {
-            bytes = null;
+            body = null;
+        }
+
+        private static void rethrowIfFatal(Throwable error) {
+            if (error instanceof ThreadDeath) throw (ThreadDeath) error;
+            if (error instanceof VirtualMachineError) throw (VirtualMachineError) error;
+            if (error instanceof LinkageError) throw (LinkageError) error;
         }
     }
 }

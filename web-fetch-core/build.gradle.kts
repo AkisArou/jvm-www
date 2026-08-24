@@ -6,6 +6,7 @@ dependencies {
     api(project(":runtime-core"))
     api(project(":web-events"))
     api(project(":web-url"))
+    api(project(":web-bodies"))
     implementation(project(":web-encoding"))
 }
 
