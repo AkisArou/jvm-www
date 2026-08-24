@@ -63,6 +63,12 @@ public final class RuntimeInstance implements AutoCloseable {
     private int hostTurnDepth;
     private boolean drainingMicrotasks;
     private RuntimeTimerQueue timerQueue;
+
+    /**
+     * Published for foreign-thread terminal cleanup. The registry itself owns synchronization and
+     * is allocated only after the first long-lived resource is reached.
+     */
+    private volatile RuntimeResourceRegistry resourceRegistry;
     private volatile boolean closed;
 
     public RuntimeInstance(OwnerExecutor ownerExecutor, RuntimeErrorReporter errorReporter) {
@@ -170,6 +176,42 @@ public final class RuntimeInstance implements AutoCloseable {
         return new PlatformPromise(this);
     }
 
+    /**
+     * Registers a long-lived host resource and returns its reusable integer slot.
+     *
+     * <p>Registration is owner-confined, but {@link #unregisterOwnedResource} may be called by a
+     * foreign terminal callback. The registry is one lazy per-runtime object with reusable array
+     * slots; this method creates no per-registration node or boxed index.</p>
+     */
+    public int registerOwnedResource(RuntimeOwnedResource resource) {
+        assertLanguageExecution();
+        RuntimeOwnedResource checked = Objects.requireNonNull(resource, "resource");
+        if (!acceptingHostTasks.get()) {
+            throw new IllegalStateException("RuntimeInstance is closing");
+        }
+        RuntimeResourceRegistry registry = resourceRegistry;
+        if (registry == null) {
+            registry = new RuntimeResourceRegistry();
+            resourceRegistry = registry;
+        }
+        return registry.register(checked);
+    }
+
+    /**
+     * Releases one exact runtime-resource slot. This method is safe to call from any thread.
+     *
+     * <p>The identity check makes a stale slot harmless after reuse. A false result means the
+     * resource was already released or the runtime detached the registry for shutdown.</p>
+     */
+    public boolean unregisterOwnedResource(RuntimeOwnedResource resource, int slot) {
+        RuntimeOwnedResource checked = Objects.requireNonNull(resource, "resource");
+        if (slot < 0) {
+            return false;
+        }
+        RuntimeResourceRegistry registry = resourceRegistry;
+        return registry != null && registry.unregister(checked, slot);
+    }
+
     /** Registers a one-shot timer and returns an exactly representable number handle. */
     public double setTimeout(RuntimeTask callback, double delayMilliseconds) {
         assertLanguageExecution();
@@ -257,7 +299,6 @@ public final class RuntimeInstance implements AutoCloseable {
      */
     public boolean admitHostTask(RuntimeTask task) {
         Objects.requireNonNull(task, "task");
-
         if (!acceptingHostTasks.get()) {
             discardTask(task);
             return false;
@@ -316,8 +357,8 @@ public final class RuntimeInstance implements AutoCloseable {
     }
 
     /**
-     * Stops admission and discards queued work. A callback already posted to the owner may still
-     * arrive, but it becomes a no-op.
+     * Stops admission, cancels every still-owned host resource, and discards queued work. A callback
+     * already posted to the owner may still arrive, but it becomes a no-op.
      */
     @Override
     public void close() {
@@ -330,7 +371,22 @@ public final class RuntimeInstance implements AutoCloseable {
         }
 
         acceptingHostTasks.set(false);
-        closed = true;
+
+        RuntimeResourceRegistry registry = resourceRegistry;
+        RuntimeOwnedResource[] ownedResources = registry == null ? null : registry.detach();
+        resourceRegistry = null;
+
+        // Owner-confined resources may need to detach AbortSignal algorithms. Give shutdown a
+        // cleanup turn without running a checkpoint; any accidentally queued microtask is discarded
+        // below rather than executed after lifecycle teardown has begun.
+        Throwable fatalResourceFailure;
+        hostTurnDepth = 1;
+        try {
+            fatalResourceFailure = closeOwnedResources(ownedResources);
+        } finally {
+            hostTurnDepth = 0;
+            closed = true;
+        }
 
         if (timerQueue != null) {
             timerQueue.close();
@@ -353,6 +409,48 @@ public final class RuntimeInstance implements AutoCloseable {
         // will observe closed and return. Resetting allows no future admission because accepting is
         // already false.
         wakeState.set(WAKE_IDLE);
+
+        if (fatalResourceFailure != null) {
+            rethrowIfFatal(fatalResourceFailure);
+        }
+    }
+
+    private Throwable closeOwnedResources(RuntimeOwnedResource[] resources) {
+        if (resources == null) {
+            return null;
+        }
+        Throwable firstFatal = null;
+        for (int index = resources.length - 1; index >= 0; index--) {
+            RuntimeOwnedResource resource = resources[index];
+            resources[index] = null;
+            if (resource == null) {
+                continue;
+            }
+            try {
+                resource.closeForRuntime();
+            } catch (Throwable error) {
+                if (isFatal(error)) {
+                    firstFatal = rememberFailure(firstFatal, error);
+                } else {
+                    try {
+                        report(RuntimeErrorPhase.DISCARD, error);
+                    } catch (Throwable reporterFatal) {
+                        firstFatal = rememberFailure(firstFatal, reporterFatal);
+                    }
+                }
+            }
+        }
+        return firstFatal;
+    }
+
+    private static Throwable rememberFailure(Throwable first, Throwable next) {
+        if (first == null) {
+            return next;
+        }
+        if (first != next) {
+            first.addSuppressed(next);
+        }
+        return first;
     }
 
     private void runScheduledWake() {
@@ -531,6 +629,12 @@ public final class RuntimeInstance implements AutoCloseable {
         if (error instanceof LinkageError) {
             throw (LinkageError) error;
         }
+    }
+
+    private static boolean isFatal(Throwable error) {
+        return error instanceof ThreadDeath
+                || error instanceof VirtualMachineError
+                || error instanceof LinkageError;
     }
 
     void assertOwnerAccess() {

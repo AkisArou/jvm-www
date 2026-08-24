@@ -3,14 +3,18 @@ package io.github.akisarou.jvmwww.web.fetch;
 import io.github.akisarou.jvmwww.runtime.JsPromise;
 import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
+import io.github.akisarou.jvmwww.runtime.RuntimeOwnedResource;
 import io.github.akisarou.jvmwww.runtime.RuntimeTask;
 import io.github.akisarou.jvmwww.web.events.AbortAlgorithm;
 import io.github.akisarou.jvmwww.web.events.AbortSignal;
 import java.util.Objects;
 
-/** One Fetch operation: returned Promise, foreign completion token, abort algorithm, and host task. */
+/**
+ * One Fetch operation: returned Promise, foreign completion token, abort algorithm, host task, and
+ * runtime-owned transport resource.
+ */
 final class FetchOperation extends JsPromise
-        implements FetchTransportCallback, AbortAlgorithm, RuntimeTask {
+        implements FetchTransportCallback, AbortAlgorithm, RuntimeTask, RuntimeOwnedResource {
     private static final int OPEN = 0;
     private static final int QUEUED_RESPONSE = 1;
     private static final int QUEUED_FAILURE = 2;
@@ -18,6 +22,7 @@ final class FetchOperation extends JsPromise
     private static final int DELIVERING = 4;
     private static final int FINISHED = 5;
     private static final int DISCARDED = 6;
+    private static final int NO_RUNTIME_RESOURCE_SLOT = -1;
 
     private final RuntimeInstance runtime;
     private final AbortSignal signal;
@@ -30,11 +35,13 @@ final class FetchOperation extends JsPromise
     private Object abortReasonReference;
     private FetchTransportCall call;
     private boolean abortRegistered;
+    private int runtimeResourceSlot;
 
     FetchOperation(RuntimeInstance runtime, AbortSignal signal) {
         super(runtime);
         this.runtime = runtime;
         this.signal = signal;
+        runtimeResourceSlot = runtime.registerOwnedResource(this);
     }
 
     void start(FetchTransport transport, FetchTransportRequest request) {
@@ -62,7 +69,10 @@ final class FetchOperation extends JsPromise
                 started.cancel();
             }
         } catch (Throwable error) {
-            rethrowIfFatal(error);
+            if (isFatal(error)) {
+                cleanupAfterFatalStart(error);
+                rethrowIfFatal(error);
+            }
             onFailure(error);
         }
     }
@@ -125,7 +135,11 @@ final class FetchOperation extends JsPromise
             failure = null;
         }
 
-        detachAbort();
+        try {
+            detachAbort();
+        } finally {
+            releaseRuntimeOwnership();
+        }
         try {
             if (state == QUEUED_RESPONSE) {
                 try {
@@ -147,6 +161,20 @@ final class FetchOperation extends JsPromise
         }
     }
 
+    /** Runtime shutdown cancels an operation even when no completion was ever queued. */
+    @Override
+    public void closeForRuntime() {
+        try {
+            detachAbort();
+        } finally {
+            try {
+                releaseRuntimeOwnership();
+            } finally {
+                discard();
+            }
+        }
+    }
+
     @Override
     public void discard() {
         FetchTransportCall localCall;
@@ -161,7 +189,9 @@ final class FetchOperation extends JsPromise
         if (localCall != null) localCall.cancel();
     }
 
-    private void admitClaimed() { runtime.admitHostTask(this); }
+    private void admitClaimed() {
+        runtime.admitHostTask(this);
+    }
 
     private void queueAbortFromSignal() {
         synchronized (this) {
@@ -186,11 +216,20 @@ final class FetchOperation extends JsPromise
 
     private void rejectCapturedAbortReason() {
         switch (abortReasonKind) {
-            case PAYLOAD_VOID: rejectVoid(); break;
-            case PAYLOAD_NUMBER: rejectNumber(abortReasonNumber); break;
-            case PAYLOAD_BOOLEAN: rejectBoolean(abortReasonBoolean); break;
-            case PAYLOAD_REFERENCE: rejectReference(abortReasonReference); break;
-            default: throw new AssertionError("Unknown abort reason kind: " + abortReasonKind);
+            case PAYLOAD_VOID:
+                rejectVoid();
+                break;
+            case PAYLOAD_NUMBER:
+                rejectNumber(abortReasonNumber);
+                break;
+            case PAYLOAD_BOOLEAN:
+                rejectBoolean(abortReasonBoolean);
+                break;
+            case PAYLOAD_REFERENCE:
+                rejectReference(abortReasonReference);
+                break;
+            default:
+                throw new AssertionError("Unknown abort reason kind: " + abortReasonKind);
         }
     }
 
@@ -205,6 +244,33 @@ final class FetchOperation extends JsPromise
             signal.removeAbortAlgorithm(this);
             abortRegistered = false;
         }
+    }
+
+    private void releaseRuntimeOwnership() {
+        final int slot;
+        synchronized (this) {
+            slot = runtimeResourceSlot;
+            runtimeResourceSlot = NO_RUNTIME_RESOURCE_SLOT;
+        }
+        if (slot != NO_RUNTIME_RESOURCE_SLOT) {
+            runtime.unregisterOwnedResource(this, slot);
+        }
+    }
+
+    private void cleanupAfterFatalStart(Throwable original) {
+        try {
+            closeForRuntime();
+        } catch (Throwable cleanupFailure) {
+            if (cleanupFailure != original) {
+                original.addSuppressed(cleanupFailure);
+            }
+        }
+    }
+
+    private static boolean isFatal(Throwable error) {
+        return error instanceof ThreadDeath
+                || error instanceof VirtualMachineError
+                || error instanceof LinkageError;
     }
 
     private static void rethrowIfFatal(Throwable error) {
