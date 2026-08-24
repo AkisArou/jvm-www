@@ -26,6 +26,7 @@ jobs:
       - run: ./scripts/test-fetch.sh
       - run: ./scripts/test-fetch-okhttp.sh
       - run: ./scripts/test-timing.sh
+      - run: ./scripts/test-timing-android.sh
       - run: ./scripts/test-websocket.sh
       - run: ./scripts/test-websocket-okhttp.sh
       - run: ./scripts/test-runtime-owned-transports.sh
