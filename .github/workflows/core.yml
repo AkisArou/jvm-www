@@ -28,6 +28,7 @@ jobs:
       - run: ./scripts/test-timing.sh
       - run: ./scripts/test-timing-android.sh
       - run: ./scripts/test-geometry.sh
+      - run: ./scripts/test-geometry-matrix.sh
       - run: ./scripts/test-websocket.sh
       - run: ./scripts/test-websocket-okhttp.sh
       - run: ./scripts/test-runtime-owned-transports.sh
