@@ -31,6 +31,13 @@ final class Utf8 {
     }
 
     static long encodeInto(String source, byte[] destination) {
+        return encodeInto(source, destination, 0);
+    }
+
+    static long encodeInto(String source, byte[] destination, int offset) {
+        if (offset < 0 || offset > destination.length) {
+            throw new IndexOutOfBoundsException("offset: " + offset);
+        }
         int read = 0;
         int written = 0;
         while (read < source.length()) {
@@ -51,10 +58,10 @@ final class Utf8 {
             }
 
             int byteCount = byteCount(codePoint);
-            if (destination.length - written < byteCount) {
+            if (destination.length - offset - written < byteCount) {
                 break;
             }
-            writeCodePoint(codePoint, destination, written);
+            writeCodePoint(codePoint, destination, offset + written);
             read += codeUnits;
             written += byteCount;
         }
