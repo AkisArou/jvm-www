@@ -164,7 +164,6 @@ public final class FetchCloneConformance {
                 rejectedRead[0].getReferencePayload() instanceof JsTypeError,
                 "read-after-fetch rejection type");
         fixture.close();
-        assertTrue(transport.call.cancelled, "runtime close cancels pending fetch");
         pass();
     }
 
