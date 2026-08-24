@@ -19,6 +19,7 @@ jobs:
           java-version: '17'
       - run: ./scripts/test-core.sh
       - run: ./scripts/test-encoding.sh
+      - run: ./scripts/test-base64.sh
       - run: ./scripts/test-console.sh
       - run: ./scripts/test-console-android.sh
       - run: ./scripts/test-url.sh
@@ -47,7 +48,7 @@ jobs:
               state,
               context: 'jvm-www/core',
               description: state === 'success'
-                ? 'Java 8 runtime, Web, timing, geometry, URL, bodies, Fetch, and WebSocket conformance passed'
-                : 'Java 8 runtime, Web, timing, geometry, URL, bodies, Fetch, or WebSocket conformance failed',
+                ? 'Java 8 runtime, Web, Base64, timing, geometry, URL, bodies, Fetch, and WebSocket conformance passed'
+                : 'Java 8 runtime, Web, Base64, timing, geometry, URL, bodies, Fetch, or WebSocket conformance failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
