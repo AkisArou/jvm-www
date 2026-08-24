@@ -22,6 +22,8 @@ javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
 TIMING_CP="$OUT/core:$OUT/timing"
 java -cp "$TIMING_CP" \
   io.github.akisarou.jvmwww.web.timing.testkit.AnimationFrameConformance
+java -cp "$TIMING_CP" \
+  io.github.akisarou.jvmwww.web.timing.testkit.IdleCallbackConformance
 
 scheduler_shape="$(
   javap -classpath "$TIMING_CP" -p \
@@ -56,18 +58,82 @@ if compgen -G \
   exit 1
 fi
 
+idle_scheduler_shape="$(
+  javap -classpath "$TIMING_CP" -p \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackScheduler
+)"
+for required in \
+  'implements io.github.akisarou.jvmwww.web.timing.IdleCallbackHost$IdleCallback,io.github.akisarou.jvmwww.runtime.RuntimeTask,io.github.akisarou.jvmwww.runtime.RuntimeOwnedResource' \
+  'io.github.akisarou.jvmwww.web.timing.IdleCallbackStore store' \
+  'int runtimeResourceSlot' \
+  'double requestIdleCallback' \
+  'void cancelIdleCallback'; do
+  if [[ "$idle_scheduler_shape" != *"$required"* ]]; then
+    printf 'IdleCallbackScheduler is missing fused host/task/lifecycle boundary: %s\n' \
+      "$required" >&2
+    exit 1
+  fi
+done
+if [[ "$idle_scheduler_shape" == *'java.lang.Runnable'* ]]; then
+  printf 'IdleCallbackScheduler must be the direct host callback and RuntimeTask, never a Runnable\n' >&2
+  exit 1
+fi
+if compgen -G \
+     "$OUT/timing/io/github/akisarou/jvmwww/web/timing/IdleCallbackScheduler\$*.class" \
+     >/dev/null; then
+  printf 'IdleCallbackScheduler must not allocate inner callback, timeout, or registration wrappers\n' >&2
+  exit 1
+fi
+
+idle_store_shape="$(
+  javap -classpath "$TIMING_CP" -p \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackStore
+)"
+for required in \
+  'io.github.akisarou.jvmwww.web.timing.IdleRequestCallback[] callbacks' \
+  'long[] generations' \
+  'long[] timeoutDeadlineNanos' \
+  'long[] timeoutSequences' \
+  'int[] nextOrder' \
+  'int[] previousOrder' \
+  'int[] nextFreeSlot' \
+  'int[] timeoutHeap' \
+  'int[] timeoutHeapPositions'; do
+  if [[ "$idle_store_shape" != *"$required"* ]]; then
+    printf 'IdleCallbackStore is missing reusable parallel-array boundary: %s\n' \
+      "$required" >&2
+    exit 1
+  fi
+done
+if [[ "$idle_store_shape" == *'java.lang.Runnable'* ]] || \
+   [[ "$idle_store_shape" == *'io.github.akisarou.jvmwww.runtime.RuntimeTask'* ]]; then
+  printf 'IdleCallbackStore must contain only synchronous reusable registration state\n' >&2
+  exit 1
+fi
+if compgen -G \
+     "$OUT/timing/io/github/akisarou/jvmwww/web/timing/IdleCallbackStore\$*.class" \
+     >/dev/null; then
+  printf 'IdleCallbackStore must not allocate inner registration or heap wrappers\n' >&2
+  exit 1
+fi
+
 host_shape="$(
   javap -classpath "$TIMING_CP" -p \
     io.github.akisarou.jvmwww.web.timing.AnimationFrameHost \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackHost \
+    io.github.akisarou.jvmwww.web.timing.IdleDeadline \
     io.github.akisarou.jvmwww.web.timing.MonotonicClock \
     io.github.akisarou.jvmwww.web.timing.Performance
 )"
 for required in \
   'interface io.github.akisarou.jvmwww.web.timing.AnimationFrameHost extends io.github.akisarou.jvmwww.web.timing.MonotonicClock' \
+  'interface io.github.akisarou.jvmwww.web.timing.IdleCallbackHost extends io.github.akisarou.jvmwww.web.timing.MonotonicClock' \
   'long nowNanos()' \
-  'double now()'; do
+  'double now()' \
+  'double timeRemaining()' \
+  'boolean isDidTimeout()'; do
   if [[ "$host_shape" != *"$required"* ]]; then
-    printf 'Web timing host/Performance boundary is missing: %s\n' "$required" >&2
+    printf 'Web timing host/deadline/Performance boundary is missing: %s\n' "$required" >&2
     exit 1
   fi
 done
@@ -93,18 +159,49 @@ if grep -Eq 'executeHostTask|admitHostTask|queueMicrotask' <<<"$on_frame_section
   exit 1
 fi
 
+idle_code="$(
+  javap -classpath "$TIMING_CP" -p -c \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackScheduler
+)"
+on_idle_section="$(
+  sed -n '/public void onIdle(long)/,/public void execute(/p' <<<"$idle_code"
+)"
+for required in \
+  'RuntimeInstance.enterHostTurn' \
+  'RuntimeInstance.leaveHostTurn' \
+  'IdleCallbackStore.detach' \
+  'IdleDeadline'; do
+  if [[ "$on_idle_section" != *"$required"* ]]; then
+    printf 'Idle delivery is missing one-callback host-turn primitive: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+if grep -Eq 'admitHostTask|queueMicrotask|java/util/' <<<"$on_idle_section"; then
+  printf 'One host idle notification must invoke one callback directly without a wrapper queue\n' >&2
+  exit 1
+fi
+
 timing_verbose="$(
   javap -classpath "$TIMING_CP" -verbose \
     io.github.akisarou.jvmwww.web.timing.AnimationFrameScheduler \
     io.github.akisarou.jvmwww.web.timing.AnimationFrameHost \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackScheduler \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackStore \
+    io.github.akisarou.jvmwww.web.timing.IdleCallbackHost \
+    io.github.akisarou.jvmwww.web.timing.IdleDeadline \
     io.github.akisarou.jvmwww.web.timing.MonotonicClock \
     io.github.akisarou.jvmwww.web.timing.Performance
 )"
 for required in \
   'io/github/akisarou/jvmwww/runtime/RuntimeInstance.registerOwnedResource' \
   'io/github/akisarou/jvmwww/runtime/RuntimeInstance.unregisterOwnedResource' \
+  'io/github/akisarou/jvmwww/runtime/RuntimeInstance.setTimeout' \
+  'io/github/akisarou/jvmwww/runtime/RuntimeInstance.clearTimeout' \
+  'io/github/akisarou/jvmwww/runtime/RuntimeInstance.admitHostTask' \
   'io/github/akisarou/jvmwww/web/timing/AnimationFrameHost.requestFrame' \
   'io/github/akisarou/jvmwww/web/timing/AnimationFrameHost.cancelFrame' \
+  'io/github/akisarou/jvmwww/web/timing/IdleCallbackHost.requestIdle' \
+  'io/github/akisarou/jvmwww/web/timing/IdleCallbackHost.cancelIdle' \
   'java/lang/System.arraycopy'; do
   if [[ "$timing_verbose" != *"$required"* ]]; then
     printf 'web-timing is missing lifecycle/allocation primitive: %s\n' "$required" >&2
