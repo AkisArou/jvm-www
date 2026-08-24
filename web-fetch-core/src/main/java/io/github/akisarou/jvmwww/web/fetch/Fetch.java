@@ -3,6 +3,7 @@ package io.github.akisarou.jvmwww.web.fetch;
 import io.github.akisarou.jvmwww.runtime.JsPromise;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.web.events.AbortSignal;
+import io.github.akisarou.jvmwww.web.url.URL;
 import java.util.Objects;
 
 /** Entry points for the transport-independent buffered Fetch profile. */
@@ -13,6 +14,13 @@ public final class Fetch {
             RuntimeInstance runtime,
             FetchTransport transport,
             String url) {
+        return fetch(runtime, transport, new Request(runtime, url));
+    }
+
+    public static JsPromise fetch(
+            RuntimeInstance runtime,
+            FetchTransport transport,
+            URL url) {
         return fetch(runtime, transport, new Request(runtime, url));
     }
 

@@ -1,7 +1,5 @@
 package io.github.akisarou.jvmwww.web.fetch;
 
-import java.util.Objects;
-
 /** Immutable transport-safe request snapshot with no owner-confined Web objects. */
 public final class FetchTransportRequest {
     private final String url;
@@ -11,7 +9,7 @@ public final class FetchTransportRequest {
     private final byte[] body;
 
     FetchTransportRequest(Request request) {
-        this.url = request.getUrl();
+        this.url = request.copyUrlForTransport();
         this.method = request.getMethod();
         Headers headers = request.getHeaders();
         this.headerNames = headers.snapshotNames();

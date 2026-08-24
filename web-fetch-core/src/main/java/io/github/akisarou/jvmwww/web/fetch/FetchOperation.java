@@ -128,11 +128,14 @@ final class FetchOperation extends JsPromise
         detachAbort();
         try {
             if (state == QUEUED_RESPONSE) {
-                fulfillReference(new Response(runtime, capturedResponse));
+                try {
+                    fulfillReference(new Response(runtime, capturedResponse));
+                } catch (Throwable error) {
+                    rethrowIfFatal(error);
+                    rejectNetworkError("Network response was invalid", error);
+                }
             } else if (state == QUEUED_FAILURE) {
-                JsTypeError networkError = new JsTypeError("Network request failed");
-                if (capturedFailure != null) networkError.initCause(capturedFailure);
-                rejectReference(networkError);
+                rejectNetworkError("Network request failed", capturedFailure);
             } else {
                 rejectCapturedAbortReason();
             }
@@ -189,6 +192,12 @@ final class FetchOperation extends JsPromise
             case PAYLOAD_REFERENCE: rejectReference(abortReasonReference); break;
             default: throw new AssertionError("Unknown abort reason kind: " + abortReasonKind);
         }
+    }
+
+    private void rejectNetworkError(String message, Throwable cause) {
+        JsTypeError networkError = new JsTypeError(message);
+        if (cause != null) networkError.initCause(cause);
+        rejectReference(networkError);
     }
 
     private void detachAbort() {

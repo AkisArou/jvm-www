@@ -5,6 +5,7 @@ import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.runtime.RuntimeTask;
 import io.github.akisarou.jvmwww.web.encoding.TextDecoder;
+import io.github.akisarou.jvmwww.web.url.URL;
 
 /** Buffered network Response for the current Fetch profile. */
 public final class Response {
@@ -20,7 +21,7 @@ public final class Response {
     Response(RuntimeInstance runtime, FetchTransportResponse transport) {
         this.runtime = runtime;
         FetchRuntimeChecks.assertLanguageExecution(runtime);
-        this.url = transport.getUrl();
+        this.url = excludeFragment(new URL(runtime, transport.getUrl()).getHref());
         this.status = transport.getStatus();
         this.statusText = transport.getStatusText();
         this.headers =
@@ -48,7 +49,7 @@ public final class Response {
         return startBodyRead(BodyReadPromise.KIND_BYTES);
     }
 
-    /** Returns a Promise fulfilled through the selected WHATWG UTF-8 decoder. */
+    /** Fetch text decoding is the exact UTF-8 replacement algorithm from web-encoding. */
     public JsPromise text() {
         assertAccess();
         return startBodyRead(BodyReadPromise.KIND_TEXT);
@@ -68,6 +69,11 @@ public final class Response {
 
     private void assertAccess() {
         FetchRuntimeChecks.assertLanguageExecution(runtime);
+    }
+
+    private static String excludeFragment(String href) {
+        int fragment = href.indexOf('#');
+        return fragment < 0 ? href : href.substring(0, fragment);
     }
 
     private static final class BodyReadPromise extends JsPromise implements RuntimeTask {

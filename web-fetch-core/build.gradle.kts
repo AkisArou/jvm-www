@@ -5,6 +5,7 @@ plugins {
 dependencies {
     api(project(":runtime-core"))
     api(project(":web-events"))
+    api(project(":web-url"))
     implementation(project(":web-encoding"))
 }
 
