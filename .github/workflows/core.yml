@@ -27,6 +27,7 @@ jobs:
       - run: ./scripts/test-fetch-okhttp.sh
       - run: ./scripts/test-timing.sh
       - run: ./scripts/test-timing-android.sh
+      - run: ./scripts/test-geometry.sh
       - run: ./scripts/test-websocket.sh
       - run: ./scripts/test-websocket-okhttp.sh
       - run: ./scripts/test-runtime-owned-transports.sh
@@ -45,7 +46,7 @@ jobs:
               state,
               context: 'jvm-www/core',
               description: state === 'success'
-                ? 'Java 8 runtime, Web, timing, URL, bodies, Fetch, and WebSocket conformance passed'
-                : 'Java 8 runtime, Web, timing, URL, bodies, Fetch, or WebSocket conformance failed',
+                ? 'Java 8 runtime, Web, timing, geometry, URL, bodies, Fetch, and WebSocket conformance passed'
+                : 'Java 8 runtime, Web, timing, geometry, URL, bodies, Fetch, or WebSocket conformance failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });

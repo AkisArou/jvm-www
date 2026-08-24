@@ -114,6 +114,16 @@ Protocol validation, close-code handling, buffered amount, failure ordering, and
 
 React Native exposes several DOM-shaped constructors for renderer interoperability. Add only the reached subset required by the Native TypeScript React renderer, such as event targets, geometry values, or read-only native element handles.
 
+The implemented first geometry slice provides:
+
+- primitive-backed `DOMPointReadOnly` and mutable `DOMPoint` values;
+- primitive-backed `DOMRectReadOnly` and mutable `DOMRect` values;
+- exact negative-dimension, NaN, infinity, and signed-zero rectangle edges;
+- `DOMQuad` with copied constructor inputs, four live same-object `DOMPoint` attributes, rectangle construction, and direct bounds calculation;
+- no per-value runtime owner, coordinate array, boxed property bag, generic collection, Java serialization, or renderer dependency.
+
+`DOMMatrix`, point transformation, JSON/structured serialization, legacy `DOMRectList`, and renderer-owned native element handles remain separate reached slices. They are not approximated with Android graphics classes, Java maps, or a general browser DOM.
+
 Do not create a general browser `document`, HTML parser, CSSOM, layout engine, `localStorage`, service workers, or navigation model merely because a package probes for browser globals. Those are separate compatibility realms with separate conformance obligations.
 
 ## Proposed module order
@@ -128,6 +138,6 @@ Do not create a general browser `document`, HTML parser, CSSOM, layout engine, `
 8. `web-bodies`: Blob, File, FormData, and body ownership.
 9. `web-fetch-core` plus `web-fetch-okhttp`.
 10. `websocket-core` plus `websocket-okhttp`.
-11. Renderer-specific DOM-shaped types only when a reached program requires them.
+11. `web-geometry`, followed by renderer-specific DOM-shaped handles only when reached.
 
 Each slice is independently green and includes exact observable tests. API breadth should follow reached programs and compatibility evidence rather than copying an inventory all at once.
