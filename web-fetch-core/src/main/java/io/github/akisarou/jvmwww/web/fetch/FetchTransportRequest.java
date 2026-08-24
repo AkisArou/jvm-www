@@ -11,12 +11,12 @@ public final class FetchTransportRequest {
     private final BufferedBodySnapshot body;
 
     FetchTransportRequest(Request request) {
+        this.body = request.claimBodyForTransport();
         this.url = request.copyUrlForTransport();
         this.method = request.getMethod();
         Headers headers = request.getHeaders();
         this.headerNames = headers.snapshotNames();
         this.headerValues = headers.snapshotValues();
-        this.body = request.bodySnapshotForTransport();
     }
 
     public String getUrl() { return url; }

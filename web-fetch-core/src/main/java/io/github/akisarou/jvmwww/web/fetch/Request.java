@@ -1,5 +1,6 @@
 package io.github.akisarou.jvmwww.web.fetch;
 
+import io.github.akisarou.jvmwww.runtime.JsPromise;
 import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot;
@@ -22,6 +23,8 @@ public final class Request {
     private static final String STRING_CONTENT_TYPE = "text/plain;charset=UTF-8";
     private static final String SEARCH_PARAMS_CONTENT_TYPE =
             "application/x-www-form-urlencoded;charset=UTF-8";
+    private static final BufferedBodySnapshot EMPTY_BODY =
+            BufferedBodySnapshot.fromOwnedBytes(new byte[0], null);
 
     private final RuntimeInstance runtime;
     private final String url;
@@ -30,6 +33,7 @@ public final class Request {
     private final Headers headers;
     private final BufferedBodySnapshot body;
     private final AbortSignal signal;
+    private boolean bodyUsed;
 
     public Request(RuntimeInstance runtime, String url) {
         this(runtime, new URL(runtime, Objects.requireNonNull(url, "url")));
@@ -237,6 +241,25 @@ public final class Request {
         this.signal = signal;
     }
 
+    /** Internal clone path: metadata is copied while the immutable body snapshot is shared. */
+    private Request(
+            RuntimeInstance runtime,
+            String url,
+            String transportUrl,
+            String method,
+            Headers headers,
+            BufferedBodySnapshot body,
+            AbortSignal signal) {
+        this.runtime = runtime;
+        FetchRuntimeChecks.assertLanguageExecution(runtime);
+        this.url = url;
+        this.transportUrl = transportUrl;
+        this.method = method;
+        this.headers = headers;
+        this.body = body;
+        this.signal = signal;
+    }
+
     public RuntimeInstance getRuntime() {
         return runtime;
     }
@@ -261,14 +284,86 @@ public final class Request {
         return signal;
     }
 
+    public boolean isBodyUsed() {
+        assertAccess();
+        return body != null && bodyUsed;
+    }
+
+    public JsPromise arrayBuffer() {
+        assertAccess();
+        return startBodyRead(FetchBodyReadPromise.KIND_BYTES);
+    }
+
+    public JsPromise bytes() {
+        assertAccess();
+        return startBodyRead(FetchBodyReadPromise.KIND_BYTES);
+    }
+
+    public JsPromise text() {
+        assertAccess();
+        return startBodyRead(FetchBodyReadPromise.KIND_TEXT);
+    }
+
+    public JsPromise blob() {
+        assertAccess();
+        return startBodyRead(FetchBodyReadPromise.KIND_BLOB);
+    }
+
+    public JsPromise formData() {
+        assertAccess();
+        return startBodyRead(FetchBodyReadPromise.KIND_FORM_DATA);
+    }
+
+    /**
+     * Clones metadata and the signal dependency while sharing the immutable buffered body bytes.
+     */
+    @Override
+    public Request clone() {
+        assertAccess();
+        if (body != null && bodyUsed) {
+            throw new JsTypeError("Cannot clone a Request whose body is already used");
+        }
+        AbortSignal clonedSignal = signal == null
+                ? null
+                : AbortSignal.any(runtime, signal);
+        return new Request(
+                runtime,
+                url,
+                transportUrl,
+                method,
+                new Headers(headers),
+                body,
+                clonedSignal);
+    }
+
     String copyUrlForTransport() {
         assertAccess();
         return transportUrl;
     }
 
-    BufferedBodySnapshot bodySnapshotForTransport() {
+    /** Marks a present body used and hands the immutable snapshot to the transport snapshot. */
+    BufferedBodySnapshot claimBodyForTransport() {
         assertAccess();
+        if (body == null) return null;
+        if (bodyUsed) {
+            throw new JsTypeError("Request body is already used");
+        }
+        bodyUsed = true;
         return body;
+    }
+
+    private JsPromise startBodyRead(int kind) {
+        boolean unusable = body != null && bodyUsed;
+        BufferedBodySnapshot captured;
+        if (unusable) {
+            captured = null;
+        } else if (body == null) {
+            captured = EMPTY_BODY;
+        } else {
+            bodyUsed = true;
+            captured = body;
+        }
+        return FetchBodyReadPromise.start(runtime, captured, kind, unusable, headers);
     }
 
     private void assertAccess() {

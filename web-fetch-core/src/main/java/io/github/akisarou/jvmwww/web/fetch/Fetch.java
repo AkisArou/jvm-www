@@ -36,9 +36,10 @@ public final class Fetch {
             throw new IllegalArgumentException("Request belongs to another RuntimeInstance");
         }
 
+        FetchTransportRequest transportRequest = new FetchTransportRequest(checkedRequest);
         AbortSignal signal = checkedRequest.getSignal();
         FetchOperation operation = new FetchOperation(checkedRuntime, signal);
-        operation.start(checkedTransport, new FetchTransportRequest(checkedRequest));
+        operation.start(checkedTransport, transportRequest);
         return operation;
     }
 }

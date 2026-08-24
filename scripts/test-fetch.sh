@@ -51,6 +51,7 @@ java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchUrlConform
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchBodyConformance
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchBodyInitConformance
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchFormDataConformance
+java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchCloneConformance
 
 fetch_operation_shape="$(
   javap -classpath "$FETCH_CP" -p io.github.akisarou.jvmwww.web.fetch.FetchOperation
@@ -64,17 +65,61 @@ if [[ "$fetch_operation_shape" != *"extends io.github.akisarou.jvmwww.runtime.Js
   exit 1
 fi
 
+body_read_shape="$(
+  javap -classpath "$FETCH_CP" -p io.github.akisarou.jvmwww.web.fetch.FetchBodyReadPromise
+)"
+if [[ "$body_read_shape" != *"extends io.github.akisarou.jvmwww.runtime.JsPromise implements io.github.akisarou.jvmwww.runtime.RuntimeTask"* ]] || \
+   [[ "$body_read_shape" == *"java.lang.Runnable"* ]]; then
+  printf 'FetchBodyReadPromise must be the returned Promise and runtime microtask, never a Runnable\n' >&2
+  exit 1
+fi
+
 request_shape="$(
   javap -classpath "$FETCH_CP" -p \
     io.github.akisarou.jvmwww.web.fetch.Request \
     io.github.akisarou.jvmwww.web.fetch.Fetch
 )"
-if [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URL"* ]] || \
-   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.bodies.BufferedBodySource"* ]] || \
-   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URLSearchParams"* ]] || \
-   [[ "$request_shape" != *"withStringBody"* ]] || \
-   [[ "$request_shape" != *"withSearchParamsBody"* ]]; then
-  printf 'Fetch Request must expose canonical URL and selected buffered BodyInit boundaries\n' >&2
+for required in \
+  'io.github.akisarou.jvmwww.web.url.URL' \
+  'io.github.akisarou.jvmwww.web.bodies.BufferedBodySource' \
+  'io.github.akisarou.jvmwww.web.url.URLSearchParams' \
+  'withStringBody' \
+  'withSearchParamsBody' \
+  'boolean isBodyUsed()' \
+  'JsPromise arrayBuffer()' \
+  'JsPromise bytes()' \
+  'JsPromise text()' \
+  'JsPromise blob()' \
+  'JsPromise formData()' \
+  'Request clone()' \
+  'claimBodyForTransport()'; do
+  if [[ "$request_shape" != *"$required"* ]]; then
+    printf 'Fetch Request is missing canonical Body/clone boundary: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+
+response_shape="$(
+  javap -classpath "$FETCH_CP" -p io.github.akisarou.jvmwww.web.fetch.Response
+)"
+for required in \
+  'JsPromise blob()' \
+  'JsPromise formData()' \
+  'Response clone()' \
+  'io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot body'; do
+  if [[ "$response_shape" != *"$required"* ]]; then
+    printf 'Response is missing shared-snapshot Body/clone boundary: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+
+if compgen -G \
+     "$OUT/fetch/io/github/akisarou/jvmwww/web/fetch/Request\$*.class" \
+     >/dev/null || \
+   compgen -G \
+     "$OUT/fetch/io/github/akisarou/jvmwww/web/fetch/Response\$*.class" \
+     >/dev/null; then
+  printf 'Request and Response readers must share FetchBodyReadPromise, not allocate inner task classes\n' >&2
   exit 1
 fi
 
@@ -89,24 +134,47 @@ if [[ "$transport_request_shape" != *"io.github.akisarou.jvmwww.web.bodies.Buffe
   exit 1
 fi
 
-response_shape="$(
-  javap -classpath "$FETCH_CP" -p \
-    io.github.akisarou.jvmwww.web.fetch.Response \
-    'io.github.akisarou.jvmwww.web.fetch.Response$BodyReadPromise'
-)"
-if [[ "$response_shape" != *"io.github.akisarou.jvmwww.runtime.JsPromise blob()"* ]] || \
-   [[ "$response_shape" != *"io.github.akisarou.jvmwww.runtime.JsPromise formData()"* ]] || \
-   [[ "$response_shape" != *"io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot body"* ]]; then
-  printf 'Response must consume one immutable snapshot and expose Blob/FormData projections\n' >&2
-  exit 1
-fi
-
 transport_request_verbose="$(
   javap -classpath "$FETCH_CP" -verbose io.github.akisarou.jvmwww.web.fetch.FetchTransportRequest
 )"
-if [[ "$transport_request_verbose" == *"io/github/akisarou/jvmwww/web/url/URL"* ]] || \
+if [[ "$transport_request_verbose" != *"Request.claimBodyForTransport"* ]] || \
+   [[ "$transport_request_verbose" == *"io/github/akisarou/jvmwww/web/url/URL"* ]] || \
    [[ "$transport_request_verbose" == *"io/github/akisarou/jvmwww/web/bodies/BufferedBodySource"* ]]; then
-  printf 'Fetch transport snapshots must not retain owner-confined URL or body objects\n' >&2
+  printf 'Fetch transport snapshots must claim one immutable body and retain no owner objects\n' >&2
+  exit 1
+fi
+
+clone_code="$(
+  javap -classpath "$FETCH_CP" -p -c \
+    io.github.akisarou.jvmwww.web.fetch.Request \
+    io.github.akisarou.jvmwww.web.fetch.Response
+)"
+request_clone_section="$(
+  sed -n \
+    '/public io.github.akisarou.jvmwww.web.fetch.Request clone()/,/java.lang.String copyUrlForTransport/p' \
+    <<<"$clone_code"
+)"
+response_clone_section="$(
+  sed -n \
+    '/public io.github.akisarou.jvmwww.web.fetch.Response clone()/,/private io.github.akisarou.jvmwww.runtime.JsPromise startBodyRead/p' \
+    <<<"$clone_code"
+)"
+for required in \
+  'AbortSignal.any' \
+  'Headers."<init>":(Lio/github/akisarou/jvmwww/web/fetch/Headers;)V'; do
+  if [[ "$request_clone_section" != *"$required"* ]]; then
+    printf 'Request.clone is missing required metadata/signal primitive: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+if [[ "$response_clone_section" != *"Headers.immutableCopy"* ]]; then
+  printf 'Response.clone must copy immutable Headers metadata\n' >&2
+  exit 1
+fi
+if grep -Eq \
+    'BufferedBodySnapshot\.(copyBytes|copyOf)|BufferedBodySource\.snapshot|FormData\.snapshot|URL\."<init>"' \
+    <<<"$request_clone_section$response_clone_section"; then
+  printf 'Fetch clones must share immutable body snapshots without extraction, byte copy, or URL parsing\n' >&2
   exit 1
 fi
 
@@ -152,8 +220,9 @@ fi
 
 form_parser_verbose="$(
   javap -classpath "$FETCH_CP" -verbose \
+    io.github.akisarou.jvmwww.web.fetch.Request \
     io.github.akisarou.jvmwww.web.fetch.Response \
-    'io.github.akisarou.jvmwww.web.fetch.Response$BodyReadPromise' \
+    io.github.akisarou.jvmwww.web.fetch.FetchBodyReadPromise \
     io.github.akisarou.jvmwww.web.fetch.FetchMimeType \
     io.github.akisarou.jvmwww.web.bodies.FormDataParser \
     'io.github.akisarou.jvmwww.web.bodies.FormDataParser$MultipartParser'
@@ -164,39 +233,40 @@ for required in \
   'io/github/akisarou/jvmwww/web/bodies/BlobData.singleView' \
   'io/github/akisarou/jvmwww/web/encoding/TextDecoder.decode:([BII)'; do
   if [[ "$form_parser_verbose" != *"$required"* ]]; then
-    printf 'Response.formData is missing direct bounded parser primitive: %s\n' "$required" >&2
+    printf 'Body.formData is missing direct bounded parser primitive: %s\n' "$required" >&2
     exit 1
   fi
 done
 if grep -Eq \
     'java/io/(ByteArrayOutputStream|ByteArrayInputStream)|java/util/regex|java/util/Scanner|java/util/(ArrayList|LinkedList|HashMap|LinkedHashMap|TreeMap)|java/nio/charset|java/util/Base64|CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ExecutorService|android/os/Handler|java/lang/Runnable' \
     <<<"$form_parser_verbose"; then
-  printf 'Response.formData must use bounded byte parsing without streams, generic metadata graphs, charset/base64 shortcuts, or schedulers\n' >&2
+  printf 'Body.formData must use bounded byte parsing without streams, generic metadata graphs, charset/base64 shortcuts, or schedulers\n' >&2
   exit 1
 fi
 
 fetch_verbose="$(
   javap -classpath "$FETCH_CP" -verbose \
     io.github.akisarou.jvmwww.web.fetch.FetchOperation \
+    io.github.akisarou.jvmwww.web.fetch.FetchBodyReadPromise \
     io.github.akisarou.jvmwww.web.fetch.Fetch \
     io.github.akisarou.jvmwww.web.fetch.FetchTransportRequest \
     io.github.akisarou.jvmwww.web.fetch.Response \
-    'io.github.akisarou.jvmwww.web.fetch.Response$BodyReadPromise' \
     io.github.akisarou.jvmwww.web.fetch.Request
 )"
 for required in \
   'io/github/akisarou/jvmwww/web/url/URL.getHref' \
   'io/github/akisarou/jvmwww/web/bodies/Blob.fromSnapshot' \
   'io/github/akisarou/jvmwww/web/bodies/BufferedBodySnapshot.copyBytes' \
-  'io/github/akisarou/jvmwww/web/bodies/FormDataParser.parseMultipart'; do
+  'io/github/akisarou/jvmwww/web/bodies/FormDataParser.parseMultipart' \
+  'io/github/akisarou/jvmwww/web/fetch/FetchBodyReadPromise.start'; do
   if [[ "$fetch_verbose" != *"$required"* ]]; then
     printf 'web-fetch-core is missing canonical URL/body primitive: %s\n' "$required" >&2
     exit 1
   fi
 done
 if grep -Eq \
-    'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|android/os/Handler|java/net/(URI|URL)|java/nio/charset|java/io/(ByteArrayOutputStream|ByteArrayInputStream)|java/util/regex|java/util/Base64|java/lang/Runnable' \
+    'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|android/os/Handler|java/net/(URI|URL)|java/nio/charset|java/io/(ByteArrayOutputStream|ByteArrayInputStream)|java/util/regex|java/util/Base64|java/lang/Runnable|java/util/concurrent/Flow|ReadableStream' \
     <<<"$fetch_verbose"; then
-  printf 'web-fetch-core must not introduce futures, schedulers, java.net/charset shortcuts, growing streams, base64, or Runnables\n' >&2
+  printf 'web-fetch-core must not introduce futures, schedulers, stream tees, java.net/charset shortcuts, growing streams, base64, or Runnables\n' >&2
   exit 1
 fi
