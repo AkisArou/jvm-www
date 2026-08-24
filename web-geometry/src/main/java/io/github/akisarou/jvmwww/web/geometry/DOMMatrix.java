@@ -250,7 +250,7 @@ public final class DOMMatrix extends DOMMatrixReadOnly {
         m23=a13*r21+a23*r22+a33*r23;
         m24=a14*r21+a24*r22+a34*r23;
         m31=a11*r31+a21*r32+a31*r33;
-        m32=a12*r31+a23*r32+a32*r33;
+        m32=a12*r31+a22*r32+a32*r33;
         m33=a13*r31+a23*r32+a33*r33;
         m34=a14*r31+a24*r32+a34*r33;
     }
