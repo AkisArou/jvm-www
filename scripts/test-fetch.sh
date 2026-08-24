@@ -35,7 +35,7 @@ mapfile -d '' BODY_SOURCES < <(
   find "$ROOT/web-bodies/src/main/java" -name '*.java' -print0 | sort -z
 )
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
-  -cp "$OUT/core:$OUT/encoding" -d "$OUT/bodies" "${BODY_SOURCES[@]}"
+  -cp "$OUT/core:$OUT/encoding:$OUT/url" -d "$OUT/bodies" "${BODY_SOURCES[@]}"
 
 mapfile -d '' FETCH_SOURCES < <(
   find "$ROOT/web-fetch-core/src/main/java" "$ROOT/web-fetch-testkit/src/main/java" \
@@ -50,6 +50,7 @@ java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchEncodingCo
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchUrlConformance
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchBodyConformance
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchBodyInitConformance
+java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchFormDataConformance
 
 fetch_operation_shape="$(
   javap -classpath "$FETCH_CP" -p io.github.akisarou.jvmwww.web.fetch.FetchOperation
@@ -70,9 +71,9 @@ request_shape="$(
 )"
 if [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URL"* ]] || \
    [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.bodies.BufferedBodySource"* ]] || \
+   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URLSearchParams"* ]] || \
    [[ "$request_shape" != *"withStringBody"* ]] || \
-   [[ "$request_shape" != *"withSearchParamsBody"* ]] || \
-   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URLSearchParams"* ]]; then
+   [[ "$request_shape" != *"withSearchParamsBody"* ]]; then
   printf 'Fetch Request must expose canonical URL and selected buffered BodyInit boundaries\n' >&2
   exit 1
 fi
@@ -94,8 +95,9 @@ response_shape="$(
     'io.github.akisarou.jvmwww.web.fetch.Response$BodyReadPromise'
 )"
 if [[ "$response_shape" != *"io.github.akisarou.jvmwww.runtime.JsPromise blob()"* ]] || \
+   [[ "$response_shape" != *"io.github.akisarou.jvmwww.runtime.JsPromise formData()"* ]] || \
    [[ "$response_shape" != *"io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot body"* ]]; then
-  printf 'Response must consume one immutable snapshot and expose Blob projection\n' >&2
+  printf 'Response must consume one immutable snapshot and expose Blob/FormData projections\n' >&2
   exit 1
 fi
 
@@ -112,11 +114,57 @@ mime_verbose="$(
   javap -classpath "$FETCH_CP" -verbose \
     io.github.akisarou.jvmwww.web.fetch.FetchMimeType \
     'io.github.akisarou.jvmwww.web.fetch.FetchMimeType$Extraction' \
-    'io.github.akisarou.jvmwww.web.fetch.FetchMimeType$ParsedMimeType'
+    'io.github.akisarou.jvmwww.web.fetch.FetchMimeType$ParsedMimeType' \
+    'io.github.akisarou.jvmwww.web.fetch.FetchMimeType$FormDataParameters'
 )"
 if [[ "$mime_verbose" != *"java/util/Arrays.copyOf"* ]] || \
    grep -Eq 'java/util/(ArrayList|LinkedList|HashMap|LinkedHashMap|TreeMap)' <<<"$mime_verbose"; then
   printf 'Fetch MIME extraction must use compact parameter arrays rather than generic collections\n' >&2
+  exit 1
+fi
+
+form_body_verbose="$(
+  javap -classpath "$FETCH_CP" -verbose \
+    io.github.akisarou.jvmwww.web.url.URLSearchParams \
+    io.github.akisarou.jvmwww.web.url.FormUrlCodec \
+    io.github.akisarou.jvmwww.web.fetch.Request
+)"
+for required in \
+  'io/github/akisarou/jvmwww/web/url/FormUrlCodec.serializeBytes' \
+  'io/github/akisarou/jvmwww/web/url/URLSearchParams.copyFormEncodedBytes' \
+  'io/github/akisarou/jvmwww/web/encoding/Utf8Codec.encode'; do
+  if [[ "$form_body_verbose" != *"$required"* ]]; then
+    printf 'selected BodyInit path is missing exact serialization primitive: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+if [[ "$form_body_verbose" == *"io/github/akisarou/jvmwww/web/encoding/TextEncoder.encode"* ]]; then
+  printf 'URLSearchParams body serialization must not allocate one UTF-8 array per tuple component\n' >&2
+  exit 1
+fi
+
+form_parser_verbose="$(
+  javap -classpath "$FETCH_CP" -verbose \
+    io.github.akisarou.jvmwww.web.fetch.Response \
+    'io.github.akisarou.jvmwww.web.fetch.Response$BodyReadPromise' \
+    io.github.akisarou.jvmwww.web.fetch.FetchMimeType \
+    io.github.akisarou.jvmwww.web.bodies.FormDataParser \
+    'io.github.akisarou.jvmwww.web.bodies.FormDataParser$MultipartParser'
+)"
+for required in \
+  'io/github/akisarou/jvmwww/web/bodies/FormDataParser.parseUrlEncoded' \
+  'io/github/akisarou/jvmwww/web/bodies/FormDataParser.parseMultipart' \
+  'io/github/akisarou/jvmwww/web/bodies/BlobData.singleView' \
+  'io/github/akisarou/jvmwww/web/encoding/TextDecoder.decode:([BII)'; do
+  if [[ "$form_parser_verbose" != *"$required"* ]]; then
+    printf 'Response.formData is missing direct bounded parser primitive: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+if grep -Eq \
+    'java/io/(ByteArrayOutputStream|ByteArrayInputStream)|java/util/regex|java/util/Scanner|java/util/(ArrayList|LinkedList|HashMap|LinkedHashMap|TreeMap)|java/nio/charset|java/util/Base64|CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ExecutorService|android/os/Handler|java/lang/Runnable' \
+    <<<"$form_parser_verbose"; then
+  printf 'Response.formData must use bounded byte parsing without streams, generic metadata graphs, charset/base64 shortcuts, or schedulers\n' >&2
   exit 1
 fi
 
@@ -133,15 +181,14 @@ for required in \
   'io/github/akisarou/jvmwww/web/url/URL.getHref' \
   'io/github/akisarou/jvmwww/web/bodies/Blob.fromSnapshot' \
   'io/github/akisarou/jvmwww/web/bodies/BufferedBodySnapshot.copyBytes' \
-  'io/github/akisarou/jvmwww/web/encoding/Utf8Codec.encode' \
-  'io/github/akisarou/jvmwww/web/url/URLSearchParams.copyFormEncodedBytes'; do
+  'io/github/akisarou/jvmwww/web/bodies/FormDataParser.parseMultipart'; do
   if [[ "$fetch_verbose" != *"$required"* ]]; then
     printf 'web-fetch-core is missing canonical URL/body primitive: %s\n' "$required" >&2
     exit 1
   fi
 done
 if grep -Eq \
-    'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|android/os/Handler|java/net/(URI|URL)|java/nio/charset|java/io/ByteArrayOutputStream|java/util/Base64|java/lang/Runnable' \
+    'CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|android/os/Handler|java/net/(URI|URL)|java/nio/charset|java/io/(ByteArrayOutputStream|ByteArrayInputStream)|java/util/regex|java/util/Base64|java/lang/Runnable' \
     <<<"$fetch_verbose"; then
   printf 'web-fetch-core must not introduce futures, schedulers, java.net/charset shortcuts, growing streams, base64, or Runnables\n' >&2
   exit 1

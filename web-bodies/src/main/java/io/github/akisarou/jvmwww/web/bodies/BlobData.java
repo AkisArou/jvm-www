@@ -25,12 +25,20 @@ final class BlobData {
     }
 
     static BlobData singleOwned(byte[] bytes) {
-        if (bytes.length == 0) return empty();
+        return singleView(bytes, 0, bytes.length);
+    }
+
+    /** Shares a range of an immutable owned array without copying its contents. */
+    static BlobData singleView(byte[] bytes, int offset, int length) {
+        if (offset < 0 || length < 0 || offset > bytes.length - length) {
+            throw new IndexOutOfBoundsException("Blob byte view does not fit source array");
+        }
+        if (length == 0) return empty();
         return new BlobData(
                 new byte[][] {bytes},
-                new int[] {0},
-                new int[] {bytes.length},
-                bytes.length);
+                new int[] {offset},
+                new int[] {length},
+                length);
     }
 
     static BlobData take(

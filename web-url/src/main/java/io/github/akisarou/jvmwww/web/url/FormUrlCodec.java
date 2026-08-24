@@ -16,16 +16,21 @@ final class FormUrlCodec {
     static void parse(
             RuntimeInstance runtime,
             String input,
-            ArrayList<URLSearchParams.Entry> output) {
+            FormUrlEncodedConsumer output) {
         String source = input;
         if (!source.isEmpty() && source.charAt(0) == '?') {
             source = source.substring(1);
         }
         if (source.isEmpty()) return;
+        parseBytes(runtime, Utf8Codec.encode(source), output);
+    }
 
-        TextEncoder encoder = new TextEncoder(runtime);
+    static void parseBytes(
+            RuntimeInstance runtime,
+            byte[] bytes,
+            FormUrlEncodedConsumer output) {
+        if (bytes.length == 0) return;
         TextDecoder decoder = new TextDecoder(runtime, "utf-8", false, true);
-        byte[] bytes = encoder.encode(source);
         int sequenceStart = 0;
         for (int index = 0; index <= bytes.length; index++) {
             if (index != bytes.length && bytes[index] != '&') continue;
@@ -101,7 +106,7 @@ final class FormUrlCodec {
             int start,
             int end,
             TextDecoder decoder,
-            ArrayList<URLSearchParams.Entry> output) {
+            FormUrlEncodedConsumer output) {
         int equals = -1;
         for (int index = start; index < end; index++) {
             if (input[index] == '=') {
@@ -111,9 +116,29 @@ final class FormUrlCodec {
         }
         int nameEnd = equals < 0 ? end : equals;
         int valueStart = equals < 0 ? end : equals + 1;
-        String name = decoder.decode(percentDecode(input, start, nameEnd));
-        String value = decoder.decode(percentDecode(input, valueStart, end));
-        output.add(new URLSearchParams.Entry(name, value));
+        String name = decodeComponent(input, start, nameEnd, decoder);
+        String value = decodeComponent(input, valueStart, end, decoder);
+        output.acceptFormEntry(name, value);
+    }
+
+    private static String decodeComponent(
+            byte[] input,
+            int start,
+            int end,
+            TextDecoder decoder) {
+        for (int index = start; index < end; index++) {
+            int current = input[index] & 0xff;
+            if (current == '+') {
+                return decoder.decode(percentDecode(input, start, end));
+            }
+            if (current == '%'
+                    && index + 2 < end
+                    && hexValue(input[index + 1] & 0xff) >= 0
+                    && hexValue(input[index + 2] & 0xff) >= 0) {
+                return decoder.decode(percentDecode(input, start, end));
+            }
+        }
+        return decoder.decode(input, start, end - start);
     }
 
     private static byte[] percentDecode(byte[] input, int start, int end) {

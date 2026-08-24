@@ -25,45 +25,27 @@ mapfile -d '' URL_SOURCES < <(
 )
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
   -cp "$OUT/core:$OUT/encoding" -d "$OUT/url" "${URL_SOURCES[@]}"
-java -cp "$OUT/core:$OUT/encoding:$OUT/url" \
-  io.github.akisarou.jvmwww.web.url.testkit.WebUrlConformance
+URL_CP="$OUT/core:$OUT/encoding:$OUT/url"
+java -cp "$URL_CP" io.github.akisarou.jvmwww.web.url.testkit.WebUrlConformance
 
 url_shape="$(
-  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -p \
-    io.github.akisarou.jvmwww.web.url.URL
+  javap -classpath "$URL_CP" -p \
+    io.github.akisarou.jvmwww.web.url.URL \
+    io.github.akisarou.jvmwww.web.url.URLSearchParams \
+    io.github.akisarou.jvmwww.web.url.FormUrlEncodedParser
 )"
 if [[ "$url_shape" != *"implements io.github.akisarou.jvmwww.web.url.URLSearchParamsUpdateTarget"* ]] || \
+   [[ "$url_shape" != *"implements io.github.akisarou.jvmwww.web.url.FormUrlEncodedConsumer"* ]] || \
    [[ "$url_shape" == *"java.lang.Runnable"* ]]; then
-  printf 'URL must own the live URLSearchParams update target without becoming a task or Runnable\n' >&2
-  exit 1
-fi
-
-params_shape="$(
-  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -p \
-    io.github.akisarou.jvmwww.web.url.URLSearchParams
-)"
-if [[ "$params_shape" != *"public byte[] copyFormEncodedBytes()"* ]]; then
-  printf 'URLSearchParams must expose the exact form-byte snapshot boundary\n' >&2
-  exit 1
-fi
-
-form_bytes_code="$(
-  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -p -c \
-    io.github.akisarou.jvmwww.web.url.FormUrlCodec
-)"
-form_bytes_section="$(
-  sed -n '/static byte\[\] serializeBytes/,/private static void parseSequence/p' \
-    <<<"$form_bytes_code"
-)"
-if grep -Eq 'StringBuilder|TextEncoder|Method serialize:' <<<"$form_bytes_section"; then
-  printf 'URLSearchParams body bytes must not allocate an intermediate serialized string or per-part encoder output\n' >&2
+  printf 'URL/URLSearchParams must own live/parser sinks without becoming tasks or Runnables\n' >&2
   exit 1
 fi
 
 url_verbose="$(
-  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -verbose \
+  javap -classpath "$URL_CP" -verbose \
     io.github.akisarou.jvmwww.web.url.URL \
     io.github.akisarou.jvmwww.web.url.URLSearchParams \
+    io.github.akisarou.jvmwww.web.url.FormUrlEncodedParser \
     io.github.akisarou.jvmwww.web.url.UrlParser \
     io.github.akisarou.jvmwww.web.url.UrlHostParser \
     io.github.akisarou.jvmwww.web.url.UrlPath \
@@ -72,13 +54,17 @@ url_verbose="$(
     io.github.akisarou.jvmwww.web.url.FormUrlCodec \
     io.github.akisarou.jvmwww.web.url.UrlScalar
 )"
-if [[ "$url_verbose" != *"io/github/akisarou/jvmwww/web/encoding/Utf8Codec.encodeInto"* ]]; then
-  printf 'URLSearchParams body bytes must use one reusable exact UTF-8 scratch buffer\n' >&2
-  exit 1
-fi
+for required in \
+  'io/github/akisarou/jvmwww/web/url/FormUrlCodec.serializeBytes' \
+  'io/github/akisarou/jvmwww/web/encoding/TextDecoder.decode:([BII)'; do
+  if [[ "$url_verbose" != *"$required"* ]]; then
+    printf 'web-url is missing exact form serialization/range-decoding primitive: %s\n' "$required" >&2
+    exit 1
+  fi
+done
 if grep -Eq \
-    'java/net/(URI|URL|URLEncoder|URLDecoder)|java/nio/charset|java/util/(HashMap|TreeMap)|CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ExecutorService|android/os/Handler|java/lang/Runnable' \
+    'java/net/(URI|URL|URLEncoder|URLDecoder)|java/nio/charset|java/io/(ByteArrayOutputStream|ByteArrayInputStream)|java/util/regex|java/util/(HashMap|TreeMap)|CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ExecutorService|android/os/Handler|java/lang/Runnable' \
     <<<"$url_verbose"; then
-  printf 'web-url must use selected URL/form/UTF-8 algorithms without java.net, charset wrappers, maps, or schedulers\n' >&2
+  printf 'web-url must use selected URL/form/UTF-8 algorithms without java.net, streams, charset wrappers, maps, regex, or schedulers\n' >&2
   exit 1
 fi

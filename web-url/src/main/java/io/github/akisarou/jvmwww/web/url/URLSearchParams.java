@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.Objects;
 
 /** Owner-confined WHATWG URLSearchParams list and form serializer. */
-public final class URLSearchParams {
+public final class URLSearchParams implements FormUrlEncodedConsumer {
     private final RuntimeInstance runtime;
     private final ArrayList<Entry> entries;
     private URLSearchParamsUpdateTarget updateTarget;
@@ -36,11 +36,19 @@ public final class URLSearchParams {
         UrlRuntimeChecks.assertLanguageExecution(runtime);
         this.entries = new ArrayList<Entry>();
         this.updateTarget = updateTarget;
-        FormUrlCodec.parse(runtime, Objects.requireNonNull(init, "init"), entries);
+        FormUrlCodec.parse(runtime, Objects.requireNonNull(init, "init"), this);
     }
 
     public RuntimeInstance getRuntime() {
         return runtime;
+    }
+
+    @Override
+    public void acceptFormEntry(String name, String value) {
+        assertAccess();
+        entries.add(new Entry(
+                Objects.requireNonNull(name, "name"),
+                Objects.requireNonNull(value, "value")));
     }
 
     public int size() {
@@ -166,26 +174,25 @@ public final class URLSearchParams {
         return entries.get(index).value;
     }
 
-    @Override
-    public String toString() {
-        assertAccess();
-        return serialize();
-    }
-
     /**
-     * Returns one exact application/x-www-form-urlencoded ASCII payload.
-     *
-     * <p>The result is independent and may be transferred to an immutable body snapshot.</p>
+     * Compiler/Fetch-facing exact form body serialization. The returned array is newly allocated
+     * and contains only ASCII application/x-www-form-urlencoded bytes.
      */
     public byte[] copyFormEncodedBytes() {
         assertAccess();
         return FormUrlCodec.serializeBytes(entries);
     }
 
+    @Override
+    public String toString() {
+        assertAccess();
+        return serialize();
+    }
+
     void replaceFromQuery(String query) {
         assertAccess();
         entries.clear();
-        FormUrlCodec.parse(runtime, query == null ? "" : query, entries);
+        FormUrlCodec.parse(runtime, query == null ? "" : query, this);
     }
 
     void setUpdateTarget(URLSearchParamsUpdateTarget updateTarget) {

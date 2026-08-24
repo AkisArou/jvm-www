@@ -1,11 +1,12 @@
 package io.github.akisarou.jvmwww.web.bodies;
 
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
+import io.github.akisarou.jvmwww.web.url.FormUrlEncodedConsumer;
 import java.util.Arrays;
 import java.util.Objects;
 
 /** Owner-confined ordered FormData entry list. Values are scalar strings or File objects. */
-public final class FormData implements BufferedBodySource {
+public final class FormData implements BufferedBodySource, FormUrlEncodedConsumer {
     private static final byte KIND_STRING = 1;
     private static final byte KIND_FILE = 2;
 
@@ -156,6 +157,16 @@ public final class FormData implements BufferedBodySource {
         return (File) values[index];
     }
 
+    /** Direct parser sink; FormUrlEncodedParser supplies already-decoded scalar strings. */
+    @Override
+    public void acceptFormEntry(String name, String value) {
+        assertAccess();
+        appendEntry(
+                Objects.requireNonNull(name, "name"),
+                Objects.requireNonNull(value, "value"),
+                KIND_STRING);
+    }
+
     @Override
     public BufferedBodySnapshot snapshot() {
         assertAccess();
@@ -179,6 +190,14 @@ public final class FormData implements BufferedBodySource {
 
     static byte stringKind() {
         return KIND_STRING;
+    }
+
+    void appendParsedString(String name, String value) {
+        appendEntry(name, value, KIND_STRING);
+    }
+
+    void appendParsedFile(String name, File value) {
+        appendEntry(name, value, KIND_FILE);
     }
 
     private void append(String name, Blob value, String filename, boolean filenameGiven) {

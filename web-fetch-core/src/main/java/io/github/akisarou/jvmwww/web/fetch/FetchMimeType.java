@@ -2,11 +2,30 @@ package io.github.akisarou.jvmwww.web.fetch;
 
 import java.util.Arrays;
 
-/** Lazy Fetch/MIME extraction used only by Response.blob(). */
+/** Lazy Fetch/MIME extraction shared by Blob and FormData body projections. */
 final class FetchMimeType {
     private FetchMimeType() {}
 
     static String extract(Headers headers) {
+        ParsedMimeType parsed = extractParsed(headers);
+        return parsed == null ? "" : parsed.serialize();
+    }
+
+    static FormDataParameters extractFormDataParameters(Headers headers) {
+        ParsedMimeType parsed = extractParsed(headers);
+        if (parsed == null) return null;
+        if (parsed.hasEssence("application", "x-www-form-urlencoded")) {
+            return FormDataParameters.urlEncoded();
+        }
+        if (parsed.hasEssence("multipart", "form-data")) {
+            String boundary = parsed.getParameter("boundary");
+            if (boundary == null || boundary.isEmpty()) return null;
+            return FormDataParameters.multipart(boundary);
+        }
+        return null;
+    }
+
+    private static ParsedMimeType extractParsed(Headers headers) {
         Extraction extraction = new Extraction();
         int headerCount = headers.size();
         for (int headerIndex = 0; headerIndex < headerCount; headerIndex++) {
@@ -34,7 +53,28 @@ final class FetchMimeType {
             }
             extraction.accept(value, segmentStart, value.length());
         }
-        return extraction.result == null ? "" : extraction.result.serialize();
+        return extraction.result;
+    }
+
+    static final class FormDataParameters {
+        static final int URL_ENCODED = 1;
+        static final int MULTIPART = 2;
+
+        final int kind;
+        final String boundary;
+
+        private FormDataParameters(int kind, String boundary) {
+            this.kind = kind;
+            this.boundary = boundary;
+        }
+
+        static FormDataParameters urlEncoded() {
+            return new FormDataParameters(URL_ENCODED, null);
+        }
+
+        static FormDataParameters multipart(String boundary) {
+            return new FormDataParameters(MULTIPART, boundary);
+        }
     }
 
     private static final class Extraction {
@@ -113,6 +153,9 @@ final class FetchMimeType {
                     position++;
                 }
                 int nameEnd = position;
+                while (nameEnd > nameStart && isHttpWhitespace(input.charAt(nameEnd - 1))) {
+                    nameEnd--;
+                }
                 if (position >= end || input.charAt(position) != '=') {
                     while (position < end && input.charAt(position) != ';') position++;
                     continue;
@@ -160,6 +203,10 @@ final class FetchMimeType {
 
         boolean isWildcard() {
             return "*".equals(type) && "*".equals(subtype);
+        }
+
+        boolean hasEssence(String expectedType, String expectedSubtype) {
+            return type.equals(expectedType) && subtype.equals(expectedSubtype);
         }
 
         boolean sameEssence(String otherType, String otherSubtype) {

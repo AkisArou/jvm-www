@@ -35,7 +35,7 @@ mapfile -d '' BODY_SOURCES < <(
   find "$ROOT/web-bodies/src/main/java" -name '*.java' -print0 | sort -z
 )
 javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -Werror \
-  -cp "$OUT/core:$OUT/encoding" -d "$OUT/bodies" "${BODY_SOURCES[@]}"
+  -cp "$OUT/core:$OUT/encoding:$OUT/url" -d "$OUT/bodies" "${BODY_SOURCES[@]}"
 
 mapfile -d '' FETCH_SOURCES < <(
   find "$ROOT/web-fetch-core/src/main/java" -name '*.java' -print0 | sort -z

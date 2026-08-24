@@ -6,6 +6,7 @@ import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.runtime.RuntimeTask;
 import io.github.akisarou.jvmwww.web.bodies.Blob;
 import io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot;
+import io.github.akisarou.jvmwww.web.bodies.FormDataParser;
 import io.github.akisarou.jvmwww.web.encoding.TextDecoder;
 import io.github.akisarou.jvmwww.web.url.URL;
 
@@ -48,34 +49,61 @@ public final class Response {
     /** Returns a Promise fulfilled with an independent byte[] copy after one microtask hop. */
     public JsPromise arrayBuffer() {
         assertAccess();
-        return startBodyRead(BodyReadPromise.KIND_BYTES, null);
+        return startBodyRead(BodyReadPromise.KIND_BYTES, null, null);
     }
 
     /** Selected-profile byte-array projection of Fetch Body.bytes(). */
     public JsPromise bytes() {
         assertAccess();
-        return startBodyRead(BodyReadPromise.KIND_BYTES, null);
+        return startBodyRead(BodyReadPromise.KIND_BYTES, null, null);
     }
 
     /** Fetch text decoding is the exact UTF-8 replacement algorithm from web-encoding. */
     public JsPromise text() {
         assertAccess();
-        return startBodyRead(BodyReadPromise.KIND_TEXT, null);
+        return startBodyRead(BodyReadPromise.KIND_TEXT, null, null);
     }
 
     /** Returns a Blob sharing the immutable response snapshot without another full byte copy. */
     public JsPromise blob() {
         assertAccess();
-        return startBodyRead(BodyReadPromise.KIND_BLOB, FetchMimeType.extract(headers));
+        return startBodyRead(
+                BodyReadPromise.KIND_BLOB,
+                FetchMimeType.extract(headers),
+                null);
     }
 
-    private JsPromise startBodyRead(int kind, String blobType) {
+    /** Parses selected URL-encoded or bounded multipart bodies into an ordered FormData. */
+    public JsPromise formData() {
+        assertAccess();
+        return startBodyRead(
+                BodyReadPromise.KIND_FORM_DATA,
+                null,
+                FetchMimeType.extractFormDataParameters(headers));
+    }
+
+    private JsPromise startBodyRead(
+            int kind,
+            String blobType,
+            FetchMimeType.FormDataParameters formDataParameters) {
         BodyReadPromise promise;
         if (bodyUsed) {
-            promise = new BodyReadPromise(runtime, null, kind, true, blobType);
+            promise = new BodyReadPromise(
+                    runtime,
+                    null,
+                    kind,
+                    true,
+                    blobType,
+                    formDataParameters);
         } else {
             bodyUsed = true;
-            promise = new BodyReadPromise(runtime, body, kind, false, blobType);
+            promise = new BodyReadPromise(
+                    runtime,
+                    body,
+                    kind,
+                    false,
+                    blobType,
+                    formDataParameters);
         }
         runtime.queueMicrotask(promise);
         return promise;
@@ -94,23 +122,27 @@ public final class Response {
         static final int KIND_BYTES = 1;
         static final int KIND_TEXT = 2;
         static final int KIND_BLOB = 3;
+        static final int KIND_FORM_DATA = 4;
 
         private BufferedBodySnapshot body;
         private final int kind;
         private final boolean unusable;
         private final String blobType;
+        private final FetchMimeType.FormDataParameters formDataParameters;
 
         BodyReadPromise(
                 RuntimeInstance runtime,
                 BufferedBodySnapshot body,
                 int kind,
                 boolean unusable,
-                String blobType) {
+                String blobType,
+                FetchMimeType.FormDataParameters formDataParameters) {
             super(runtime);
             this.body = body;
             this.kind = kind;
             this.unusable = unusable;
             this.blobType = blobType;
+            this.formDataParameters = formDataParameters;
         }
 
         @Override
@@ -128,6 +160,8 @@ public final class Response {
                     fulfillReference(new TextDecoder(runtime).decode(captured.copyBytes()));
                 } else if (kind == KIND_BLOB) {
                     fulfillReference(Blob.fromSnapshot(runtime, captured, blobType));
+                } else if (kind == KIND_FORM_DATA) {
+                    fulfillReference(parseFormData(runtime, captured, formDataParameters));
                 } else {
                     throw new AssertionError("Unknown response body read kind: " + kind);
                 }
@@ -140,6 +174,24 @@ public final class Response {
         @Override
         public void discard() {
             body = null;
+        }
+
+        private static Object parseFormData(
+                RuntimeInstance runtime,
+                BufferedBodySnapshot body,
+                FetchMimeType.FormDataParameters parameters) {
+            if (parameters == null) {
+                throw new JsTypeError(
+                        "Response formData() requires multipart/form-data or "
+                                + "application/x-www-form-urlencoded");
+            }
+            if (parameters.kind == FetchMimeType.FormDataParameters.URL_ENCODED) {
+                return FormDataParser.parseUrlEncoded(runtime, body);
+            }
+            if (parameters.kind == FetchMimeType.FormDataParameters.MULTIPART) {
+                return FormDataParser.parseMultipart(runtime, body, parameters.boundary);
+            }
+            throw new AssertionError("Unknown form data MIME kind: " + parameters.kind);
         }
 
         private static void rethrowIfFatal(Throwable error) {

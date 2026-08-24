@@ -74,35 +74,45 @@ public final class TextDecoder {
     /** Flushes any streaming decoder state with no additional input. */
     public String decode() {
         assertAccess();
-        return decodeInternal(null, false);
+        return decodeInternal(null, 0, 0, false);
     }
 
     public String decode(byte[] input) {
         return decode(input, TextDecodeOptions.DEFAULT);
     }
 
+    /** Decodes one immutable byte-array range without allocating a temporary slice. */
+    public String decode(byte[] input, int offset, int length) {
+        assertAccess();
+        byte[] checked = Objects.requireNonNull(input, "input");
+        checkRange(checked.length, offset, length);
+        return decodeInternal(checked, offset, length, false);
+    }
+
     /** Static-profile call path that avoids allocating a TextDecodeOptions object. */
     public String decode(byte[] input, boolean stream) {
         assertAccess();
-        return decodeInternal(Objects.requireNonNull(input, "input"), stream);
+        byte[] checked = Objects.requireNonNull(input, "input");
+        return decodeInternal(checked, 0, checked.length, stream);
     }
 
     public String decode(byte[] input, TextDecodeOptions options) {
         assertAccess();
+        byte[] checkedInput = Objects.requireNonNull(input, "input");
         TextDecodeOptions checked = options == null ? TextDecodeOptions.DEFAULT : options;
-        return decodeInternal(Objects.requireNonNull(input, "input"), checked.isStream());
+        return decodeInternal(checkedInput, 0, checkedInput.length, checked.isStream());
     }
 
-    private String decodeInternal(byte[] input, boolean stream) {
+    private String decodeInternal(byte[] input, int offset, int length, boolean stream) {
         if (!doNotFlush) {
             resetSequence();
             bomSeen = false;
         }
         doNotFlush = stream;
 
-        int inputLength = input == null ? 0 : input.length;
-        StringBuilder output = new StringBuilder(inputLength);
-        for (int index = 0; index < inputLength; index++) {
+        StringBuilder output = new StringBuilder(length);
+        int end = offset + length;
+        for (int index = offset; index < end; index++) {
             int current = input[index] & 0xff;
             boolean reprocess;
             do {
@@ -178,6 +188,14 @@ public final class TextDecoder {
 
     private void assertAccess() {
         EncodingRuntimeChecks.assertLanguageExecution(runtime);
+    }
+
+    private static void checkRange(int arrayLength, int offset, int length) {
+        if (offset < 0 || length < 0 || offset > arrayLength - length) {
+            throw new IndexOutOfBoundsException(
+                    "UTF-8 input range does not fit array: offset="
+                            + offset + ", length=" + length);
+        }
     }
 
     private static void requireUtf8Label(String label) {

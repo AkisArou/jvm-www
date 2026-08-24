@@ -5,6 +5,7 @@ plugins {
 dependencies {
     api(project(":runtime-core"))
     implementation(project(":web-encoding"))
+    api(project(":web-url"))
 }
 
 java {
