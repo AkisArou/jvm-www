@@ -332,8 +332,8 @@ public final class Request {
         if ("DELETE".equals(upper)
                 || "GET".equals(upper)
                 || "HEAD".equals(upper)
-                || "OPTIONS".equals(uper)
-                || "POST".equals(uper)
+                || "OPTIONS".equals(upper)
+                || "POST".equals(upper)
                 || "PUT".equals(upper)) {
             return upper;
         }
