@@ -3,11 +3,13 @@ package io.github.akisarou.jvmwww.web.url;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.web.encoding.TextDecoder;
 import io.github.akisarou.jvmwww.web.encoding.TextEncoder;
+import io.github.akisarou.jvmwww.web.encoding.Utf8Codec;
 import java.util.ArrayList;
 
 /** application/x-www-form-urlencoded parser and serializer used by URLSearchParams. */
 final class FormUrlCodec {
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+    private static final byte[] EMPTY_BYTES = new byte[0];
 
     private FormUrlCodec() {}
 
@@ -48,6 +50,50 @@ final class FormUrlCodec {
             appendEncoded(result, encoder.encode(entry.value));
         }
         return result.toString();
+    }
+
+    /** Writes one exact ASCII form payload without an intermediate serialized String. */
+    static byte[] serializeBytes(ArrayList<URLSearchParams.Entry> entries) {
+        if (entries.isEmpty()) return EMPTY_BYTES;
+
+        int maximumUtf8Length = 0;
+        for (int index = 0; index < entries.size(); index++) {
+            URLSearchParams.Entry entry = entries.get(index);
+            maximumUtf8Length = Math.max(
+                    maximumUtf8Length,
+                    Utf8Codec.encodedLength(entry.name));
+            maximumUtf8Length = Math.max(
+                    maximumUtf8Length,
+                    Utf8Codec.encodedLength(entry.value));
+        }
+
+        byte[] scratch = maximumUtf8Length == 0
+                ? EMPTY_BYTES
+                : new byte[maximumUtf8Length];
+        long outputLength = entries.size() * 2L - 1L;
+        for (int index = 0; index < entries.size(); index++) {
+            URLSearchParams.Entry entry = entries.get(index);
+            outputLength += encodedComponentLength(entry.name, scratch);
+            outputLength += encodedComponentLength(entry.value, scratch);
+            if (outputLength > Integer.MAX_VALUE) {
+                throw new OutOfMemoryError(
+                        "URLSearchParams encoded body exceeds Java array limits");
+            }
+        }
+
+        byte[] output = new byte[(int) outputLength];
+        int written = 0;
+        for (int index = 0; index < entries.size(); index++) {
+            if (index != 0) output[written++] = '&';
+            URLSearchParams.Entry entry = entries.get(index);
+            written = writeEncodedComponent(entry.name, scratch, output, written);
+            output[written++] = '=';
+            written = writeEncodedComponent(entry.value, scratch, output, written);
+        }
+        if (written != output.length) {
+            throw new AssertionError("Exact form body length was not filled");
+        }
+        return output;
     }
 
     private static void parseSequence(
@@ -94,6 +140,46 @@ final class FormUrlCodec {
         byte[] exact = new byte[written];
         System.arraycopy(output, 0, exact, 0, written);
         return exact;
+    }
+
+    private static long encodedComponentLength(String value, byte[] scratch) {
+        int byteLength = encodeIntoScratch(value, scratch);
+        long length = 0L;
+        for (int index = 0; index < byteLength; index++) {
+            int current = scratch[index] & 0xff;
+            length += isFormSafe(current) || current == 0x20 ? 1L : 3L;
+        }
+        return length;
+    }
+
+    private static int writeEncodedComponent(
+            String value,
+            byte[] scratch,
+            byte[] output,
+            int offset) {
+        int byteLength = encodeIntoScratch(value, scratch);
+        int written = offset;
+        for (int index = 0; index < byteLength; index++) {
+            int current = scratch[index] & 0xff;
+            if (isFormSafe(current)) {
+                output[written++] = (byte) current;
+            } else if (current == 0x20) {
+                output[written++] = '+';
+            } else {
+                output[written++] = '%';
+                output[written++] = (byte) HEX[current >>> 4];
+                output[written++] = (byte) HEX[current & 0x0f];
+            }
+        }
+        return written;
+    }
+
+    private static int encodeIntoScratch(String value, byte[] scratch) {
+        long progress = Utf8Codec.encodeInto(value, scratch, 0);
+        if ((int) (progress >>> 32) != value.length()) {
+            throw new AssertionError("UTF-8 scratch buffer was undersized");
+        }
+        return (int) progress;
     }
 
     private static void appendEncoded(StringBuilder output, byte[] bytes) {

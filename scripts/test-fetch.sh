@@ -49,6 +49,7 @@ java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchConformanc
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchEncodingConformance
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchUrlConformance
 java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchBodyConformance
+java -cp "$FETCH_CP" io.github.akisarou.jvmwww.web.fetch.testkit.FetchBodyInitConformance
 
 fetch_operation_shape="$(
   javap -classpath "$FETCH_CP" -p io.github.akisarou.jvmwww.web.fetch.FetchOperation
@@ -68,8 +69,11 @@ request_shape="$(
     io.github.akisarou.jvmwww.web.fetch.Fetch
 )"
 if [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URL"* ]] || \
-   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.bodies.BufferedBodySource"* ]]; then
-  printf 'Fetch Request must expose canonical URL and buffered body input boundaries\n' >&2
+   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.bodies.BufferedBodySource"* ]] || \
+   [[ "$request_shape" != *"withStringBody"* ]] || \
+   [[ "$request_shape" != *"withSearchParamsBody"* ]] || \
+   [[ "$request_shape" != *"io.github.akisarou.jvmwww.web.url.URLSearchParams"* ]]; then
+  printf 'Fetch Request must expose canonical URL and selected buffered BodyInit boundaries\n' >&2
   exit 1
 fi
 
@@ -128,7 +132,9 @@ fetch_verbose="$(
 for required in \
   'io/github/akisarou/jvmwww/web/url/URL.getHref' \
   'io/github/akisarou/jvmwww/web/bodies/Blob.fromSnapshot' \
-  'io/github/akisarou/jvmwww/web/bodies/BufferedBodySnapshot.copyBytes'; do
+  'io/github/akisarou/jvmwww/web/bodies/BufferedBodySnapshot.copyBytes' \
+  'io/github/akisarou/jvmwww/web/encoding/Utf8Codec.encode' \
+  'io/github/akisarou/jvmwww/web/url/URLSearchParams.copyFormEncodedBytes'; do
   if [[ "$fetch_verbose" != *"$required"* ]]; then
     printf 'web-fetch-core is missing canonical URL/body primitive: %s\n' "$required" >&2
     exit 1

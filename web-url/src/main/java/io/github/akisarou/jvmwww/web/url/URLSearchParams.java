@@ -172,6 +172,16 @@ public final class URLSearchParams {
         return serialize();
     }
 
+    /**
+     * Returns one exact application/x-www-form-urlencoded ASCII payload.
+     *
+     * <p>The result is independent and may be transferred to an immutable body snapshot.</p>
+     */
+    public byte[] copyFormEncodedBytes() {
+        assertAccess();
+        return FormUrlCodec.serializeBytes(entries);
+    }
+
     void replaceFromQuery(String query) {
         assertAccess();
         entries.clear();

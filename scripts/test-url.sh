@@ -38,6 +38,28 @@ if [[ "$url_shape" != *"implements io.github.akisarou.jvmwww.web.url.URLSearchPa
   exit 1
 fi
 
+params_shape="$(
+  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -p \
+    io.github.akisarou.jvmwww.web.url.URLSearchParams
+)"
+if [[ "$params_shape" != *"public byte[] copyFormEncodedBytes()"* ]]; then
+  printf 'URLSearchParams must expose the exact form-byte snapshot boundary\n' >&2
+  exit 1
+fi
+
+form_bytes_code="$(
+  javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -p -c \
+    io.github.akisarou.jvmwww.web.url.FormUrlCodec
+)"
+form_bytes_section="$(
+  sed -n '/static byte\[\] serializeBytes/,/private static void parseSequence/p' \
+    <<<"$form_bytes_code"
+)"
+if grep -Eq 'StringBuilder|TextEncoder|Method serialize:' <<<"$form_bytes_section"; then
+  printf 'URLSearchParams body bytes must not allocate an intermediate serialized string or per-part encoder output\n' >&2
+  exit 1
+fi
+
 url_verbose="$(
   javap -classpath "$OUT/core:$OUT/encoding:$OUT/url" -verbose \
     io.github.akisarou.jvmwww.web.url.URL \
@@ -50,6 +72,10 @@ url_verbose="$(
     io.github.akisarou.jvmwww.web.url.FormUrlCodec \
     io.github.akisarou.jvmwww.web.url.UrlScalar
 )"
+if [[ "$url_verbose" != *"io/github/akisarou/jvmwww/web/encoding/Utf8Codec.encodeInto"* ]]; then
+  printf 'URLSearchParams body bytes must use one reusable exact UTF-8 scratch buffer\n' >&2
+  exit 1
+fi
 if grep -Eq \
     'java/net/(URI|URL|URLEncoder|URLDecoder)|java/nio/charset|java/util/(HashMap|TreeMap)|CompletableFuture|kotlinx/coroutines|ScheduledExecutorService|ExecutorService|android/os/Handler|java/lang/Runnable' \
     <<<"$url_verbose"; then

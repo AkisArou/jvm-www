@@ -4,13 +4,25 @@ import io.github.akisarou.jvmwww.runtime.JsTypeError;
 import io.github.akisarou.jvmwww.runtime.RuntimeInstance;
 import io.github.akisarou.jvmwww.web.bodies.BufferedBodySnapshot;
 import io.github.akisarou.jvmwww.web.bodies.BufferedBodySource;
+import io.github.akisarou.jvmwww.web.encoding.Utf8Codec;
 import io.github.akisarou.jvmwww.web.events.AbortSignal;
 import io.github.akisarou.jvmwww.web.url.URL;
+import io.github.akisarou.jvmwww.web.url.URLSearchParams;
 import java.util.Locale;
 import java.util.Objects;
 
 /** Buffered Request for the current direct-JVM Fetch profile. */
 public final class Request {
+    private static final int BODY_NONE = 0;
+    private static final int BODY_BYTES = 1;
+    private static final int BODY_SOURCE = 2;
+    private static final int BODY_STRING = 3;
+    private static final int BODY_SEARCH_PARAMS = 4;
+
+    private static final String STRING_CONTENT_TYPE = "text/plain;charset=UTF-8";
+    private static final String SEARCH_PARAMS_CONTENT_TYPE =
+            "application/x-www-form-urlencoded;charset=UTF-8";
+
     private final RuntimeInstance runtime;
     private final String url;
     private final String transportUrl;
@@ -24,7 +36,7 @@ public final class Request {
     }
 
     public Request(RuntimeInstance runtime, URL url) {
-        this(runtime, url, "GET", null, null, null, null);
+        this(runtime, url, "GET", null, BODY_NONE, null, null);
     }
 
     public Request(
@@ -39,8 +51,8 @@ public final class Request {
                 new URL(runtime, Objects.requireNonNull(url, "url")),
                 method,
                 headers,
+                body == null ? BODY_NONE : BODY_BYTES,
                 body,
-                null,
                 signal);
     }
 
@@ -51,7 +63,14 @@ public final class Request {
             Headers headers,
             byte[] body,
             AbortSignal signal) {
-        this(runtime, url, method, headers, body, null, signal);
+        this(
+                runtime,
+                url,
+                method,
+                headers,
+                body == null ? BODY_NONE : BODY_BYTES,
+                body,
+                signal);
     }
 
     /**
@@ -72,7 +91,7 @@ public final class Request {
                 new URL(runtime, Objects.requireNonNull(url, "url")),
                 method,
                 headers,
-                null,
+                BODY_SOURCE,
                 Objects.requireNonNull(body, "body"),
                 signal);
     }
@@ -90,7 +109,79 @@ public final class Request {
                 url,
                 method,
                 headers,
-                null,
+                BODY_SOURCE,
+                Objects.requireNonNull(body, "body"),
+                signal);
+    }
+
+    /** Captures a scalar UTF-8 string body with Fetch's inferred text Content-Type. */
+    public static Request withStringBody(
+            RuntimeInstance runtime,
+            String url,
+            String method,
+            Headers headers,
+            String body,
+            AbortSignal signal) {
+        return new Request(
+                runtime,
+                new URL(runtime, Objects.requireNonNull(url, "url")),
+                method,
+                headers,
+                BODY_STRING,
+                Objects.requireNonNull(body, "body"),
+                signal);
+    }
+
+    /** URL-object variant of the scalar UTF-8 string body constructor. */
+    public static Request withStringBody(
+            RuntimeInstance runtime,
+            URL url,
+            String method,
+            Headers headers,
+            String body,
+            AbortSignal signal) {
+        return new Request(
+                runtime,
+                url,
+                method,
+                headers,
+                BODY_STRING,
+                Objects.requireNonNull(body, "body"),
+                signal);
+    }
+
+    /** Captures an exact application/x-www-form-urlencoded URLSearchParams body. */
+    public static Request withSearchParamsBody(
+            RuntimeInstance runtime,
+            String url,
+            String method,
+            Headers headers,
+            URLSearchParams body,
+            AbortSignal signal) {
+        return new Request(
+                runtime,
+                new URL(runtime, Objects.requireNonNull(url, "url")),
+                method,
+                headers,
+                BODY_SEARCH_PARAMS,
+                Objects.requireNonNull(body, "body"),
+                signal);
+    }
+
+    /** URL-object variant of the URLSearchParams body constructor. */
+    public static Request withSearchParamsBody(
+            RuntimeInstance runtime,
+            URL url,
+            String method,
+            Headers headers,
+            URLSearchParams body,
+            AbortSignal signal) {
+        return new Request(
+                runtime,
+                url,
+                method,
+                headers,
+                BODY_SEARCH_PARAMS,
                 Objects.requireNonNull(body, "body"),
                 signal);
     }
@@ -100,8 +191,8 @@ public final class Request {
             URL url,
             String method,
             Headers headers,
-            byte[] byteBody,
-            BufferedBodySource bodySource,
+            int bodyKind,
+            Object bodyInput,
             AbortSignal signal) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         FetchRuntimeChecks.assertLanguageExecution(runtime);
@@ -116,8 +207,8 @@ public final class Request {
         this.transportUrl = excludeFragment(this.url);
         this.method = normalizeMethod(method == null ? "GET" : method);
 
-        boolean hasBody = byteBody != null || bodySource != null;
-        if (("GET".equals(this.method) || "HEAD".equals(this.method)) && hasBody) {
+        if (("GET".equals(this.method) || "HEAD".equals(this.method))
+                && bodyKind != BODY_NONE) {
             throw new JsTypeError("GET/HEAD request cannot have a body");
         }
 
@@ -133,17 +224,7 @@ public final class Request {
             throw new IllegalArgumentException("Request signal belongs to another RuntimeInstance");
         }
 
-        BufferedBodySnapshot capturedBody = null;
-        if (bodySource != null) {
-            if (bodySource.getRuntime() != runtime) {
-                throw new IllegalArgumentException("Request body belongs to another RuntimeInstance");
-            }
-            capturedBody = Objects.requireNonNull(
-                    bodySource.snapshot(),
-                    "BufferedBodySource.snapshot returned null");
-        } else if (byteBody != null) {
-            capturedBody = BufferedBodySnapshot.copyOf(byteBody, null);
-        }
+        BufferedBodySnapshot capturedBody = captureBody(runtime, bodyKind, bodyInput);
         if (capturedBody != null) {
             String inferredContentType = capturedBody.getContentType();
             if (inferredContentType != null
@@ -194,6 +275,40 @@ public final class Request {
         FetchRuntimeChecks.assertLanguageExecution(runtime);
     }
 
+    private static BufferedBodySnapshot captureBody(
+            RuntimeInstance runtime,
+            int bodyKind,
+            Object bodyInput) {
+        switch (bodyKind) {
+            case BODY_NONE:
+                return null;
+            case BODY_BYTES:
+                return BufferedBodySnapshot.copyOf((byte[]) bodyInput, null);
+            case BODY_SOURCE:
+                BufferedBodySource source = (BufferedBodySource) bodyInput;
+                if (source.getRuntime() != runtime) {
+                    throw new IllegalArgumentException("Request body belongs to another RuntimeInstance");
+                }
+                return Objects.requireNonNull(
+                        source.snapshot(),
+                        "BufferedBodySource.snapshot returned null");
+            case BODY_STRING:
+                return BufferedBodySnapshot.fromOwnedBytes(
+                        Utf8Codec.encode((String) bodyInput),
+                        STRING_CONTENT_TYPE);
+            case BODY_SEARCH_PARAMS:
+                URLSearchParams params = (URLSearchParams) bodyInput;
+                if (params.getRuntime() != runtime) {
+                    throw new IllegalArgumentException("Request body belongs to another RuntimeInstance");
+                }
+                return BufferedBodySnapshot.fromOwnedBytes(
+                        params.copyFormEncodedBytes(),
+                        SEARCH_PARAMS_CONTENT_TYPE);
+            default:
+                throw new AssertionError("Unknown Request body kind: " + bodyKind);
+        }
+    }
+
     private static String excludeFragment(String href) {
         int fragment = href.indexOf('#');
         return fragment < 0 ? href : href.substring(0, fragment);
@@ -217,8 +332,8 @@ public final class Request {
         if ("DELETE".equals(upper)
                 || "GET".equals(upper)
                 || "HEAD".equals(upper)
-                || "OPTIONS".equals(upper)
-                || "POST".equals(upper)
+                || "OPTIONS".equals(uper)
+                || "POST".equals(uper)
                 || "PUT".equals(upper)) {
             return upper;
         }
