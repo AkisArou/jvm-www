@@ -138,8 +138,15 @@ for required in \
     exit 1
   fi
 done
-if [[ "$form_body_verbose" == *"io/github/akisarou/jvmwww/web/encoding/TextEncoder.encode"* ]]; then
-  printf 'URLSearchParams body serialization must not allocate one UTF-8 array per tuple component\n' >&2
+form_bytes_code="$(
+  javap -classpath "$FETCH_CP" -p -c io.github.akisarou.jvmwww.web.url.FormUrlCodec
+)"
+form_bytes_section="$(
+  sed -n '/static byte\[\] serializeBytes/,/private static void parseSequence/p' \
+    <<<"$form_bytes_code"
+)"
+if grep -Eq 'StringBuilder|TextEncoder|Method serialize:' <<<"$form_bytes_section"; then
+  printf 'URLSearchParams body serialization must not allocate an intermediate String or per-component UTF-8 array\n' >&2
   exit 1
 fi
 
