@@ -66,6 +66,21 @@ public final class ReactNativeElement {
         return context.getOffsetHeight(elementIdentity);
     }
 
+    /** Returns the renderer's stable public wrapper for the current offset parent. */
+    public ReactNativeElement getOffsetParent() {
+        return context.getOffsetParent(elementIdentity);
+    }
+
+    /** Returns the rounded untransformed offset relative to {@link #getOffsetParent()}. */
+    public double getOffsetTop() {
+        return context.getOffsetTop(elementIdentity);
+    }
+
+    /** Returns the rounded untransformed offset relative to {@link #getOffsetParent()}. */
+    public double getOffsetLeft() {
+        return context.getOffsetLeft(elementIdentity);
+    }
+
     public double getClientWidth() {
         return context.getClientWidth(elementIdentity);
     }
@@ -96,5 +111,9 @@ public final class ReactNativeElement {
 
     public double getScrollHeight() {
         return context.getScrollHeight(elementIdentity);
+    }
+
+    boolean matches(NativeElementContext expectedContext, long expectedIdentity) {
+        return context == expectedContext && elementIdentity == expectedIdentity;
     }
 }

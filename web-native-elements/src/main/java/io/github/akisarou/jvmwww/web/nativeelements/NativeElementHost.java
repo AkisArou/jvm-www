@@ -4,12 +4,12 @@ package io.github.akisarou.jvmwww.web.nativeelements;
  * Renderer boundary used by owner-confined React Native element values.
  *
  * <p>Every method is synchronous and must be called only on the runtime owner. Element identities
- * are opaque, generation-safe values owned by the renderer. A rectangle measurement returning
- * {@code true} must call {@link NativeElementRectSink#setRect} exactly once before returning;
- * returning {@code false} must not write the sink. Scalar client and scroll metrics return positive
- * zero when the element or committed metric snapshot is unavailable.</p>
+ * are opaque, generation-safe values owned by the renderer. A rectangle or offset measurement
+ * returning {@code true} must write its supplied sink exactly once before returning; returning
+ * {@code false} must not write. Scalar client and scroll metrics return positive zero when the
+ * element or committed metric snapshot is unavailable.</p>
  */
-public interface NativeElementHost {
+public interface NativeElementHost extends NativeElementPublicInstanceStore {
     boolean isConnected(long elementIdentity);
 
     String getTagName(long elementIdentity);
@@ -20,6 +20,8 @@ public interface NativeElementHost {
             long elementIdentity,
             boolean includeTransform,
             NativeElementRectSink sink);
+
+    boolean measureOffset(long elementIdentity, NativeElementOffsetSink sink);
 
     double getClientWidth(long elementIdentity);
 

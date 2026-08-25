@@ -2,17 +2,11 @@ package io.github.akisarou.jvmwww.web.nativeelements.android;
 
 import android.os.Looper;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementHost;
+import io.github.akisarou.jvmwww.web.nativeelements.NativeElementOffsetSink;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink;
+import io.github.akisarou.jvmwww.web.nativeelements.ReactNativeElement;
 import java.util.Objects;
 
-/**
- * Owner-confined committed-layout table for Android/native renderers.
- *
- * <p>The renderer publishes primitive metadata, transformed and untransformed border boxes, and
- * reached client/scroll metrics on one Android Looper. Web reads resolve an opaque generation-safe
- * identity directly against those arrays. No Android View or renderer object is retained or
- * exposed.</p>
- */
 public final class AndroidNativeElementHost implements NativeElementHost, AutoCloseable {
     private static final int INITIAL_CAPACITY = 16;
     private static final int SLOT_BITS = 20;
@@ -23,12 +17,13 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     private static final byte STATE_ACTIVE = 1;
     private static final byte STATE_HAS_LAYOUT = 2;
     private static final byte STATE_HAS_CLIENT_AND_SCROLL = 4;
+    private static final byte STATE_HAS_OFFSET = 8;
 
     private static final int METADATA_STRIDE = 2;
     private static final int TAG_NAME_OFFSET = 0;
     private static final int ID_OFFSET = 1;
 
-    private static final int LAYOUT_STRIDE = 16;
+    private static final int LAYOUT_STRIDE = 18;
     private static final int TRANSFORMED_X = 0;
     private static final int TRANSFORMED_Y = 1;
     private static final int TRANSFORMED_WIDTH = 2;
@@ -45,13 +40,17 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     private static final int SCROLL_TOP = 13;
     private static final int SCROLL_WIDTH = 14;
     private static final int SCROLL_HEIGHT = 15;
+    private static final int OFFSET_TOP = 16;
+    private static final int OFFSET_LEFT = 17;
 
     private final Looper looper;
 
     private long[] generations;
+    private long[] offsetParents;
     private int[] nextFreeSlot;
     private byte[] states;
     private String[] metadata;
+    private ReactNativeElement[] publicInstances;
     private double[] layout;
     private int firstFreeSlot = -1;
     private int nextUnusedSlot;
@@ -62,7 +61,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         this.looper = Objects.requireNonNull(looper, "looper");
     }
 
-    /** Creates a committed-layout host attached to the calling thread's Android Looper. */
     public static AndroidNativeElementHost forCurrentLooper() {
         Looper looper = Looper.myLooper();
         if (looper == null) {
@@ -75,12 +73,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return looper;
     }
 
-    /**
-     * Allocates one opaque generation-safe identity for a newly mounted renderer element.
-     *
-     * <p>The supplied immutable Strings are retained directly. Null metadata is normalized to the
-     * empty string before publication.</p>
-     */
     public long mountElement(String tagName, String id) {
         assertMutationAllowed();
         int slot = allocateSlot();
@@ -92,7 +84,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return encodeIdentity(slot, generations[slot]);
     }
 
-    /** Replaces the committed tag name and ID for one still-mounted identity. */
     public boolean commitMetadata(long elementIdentity, String tagName, String id) {
         assertMutationAllowed();
         int slot = resolveActiveSlot(elementIdentity);
@@ -105,11 +96,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
-    /**
-     * Atomically replaces both transformed and untransformed committed border-box snapshots.
-     *
-     * <p>All values are unrestricted doubles and are stored without normalization.</p>
-     */
     public boolean commitLayout(
             long elementIdentity,
             double transformedX,
@@ -138,12 +124,30 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
-    /**
-     * Atomically replaces the reached client-box, border-origin, and scroll metrics.
-     *
-     * <p>The values map directly to clientWidth, clientHeight, clientTop, clientLeft, scrollLeft,
-     * scrollTop, scrollWidth, and scrollHeight, in that order. They remain unrestricted doubles.</p>
-     */
+    public boolean commitOffset(
+            long elementIdentity,
+            long offsetParentIdentity,
+            double top,
+            double left) {
+        assertMutationAllowed();
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0) {
+            return false;
+        }
+        if (offsetParentIdentity != 0L) {
+            int parentSlot = resolveActiveSlot(offsetParentIdentity);
+            if (parentSlot < 0 || parentSlot == slot) {
+                return false;
+            }
+        }
+        int layoutIndex = slot * LAYOUT_STRIDE;
+        offsetParents[slot] = offsetParentIdentity;
+        layout[layoutIndex + OFFSET_TOP] = top;
+        layout[layoutIndex + OFFSET_LEFT] = left;
+        states[slot] = (byte) (states[slot] | STATE_HAS_OFFSET);
+        return true;
+    }
+
     public boolean commitClientAndScrollMetrics(
             long elementIdentity,
             double clientWidth,
@@ -172,7 +176,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
-    /** Makes a mounted element temporarily layout-unavailable without changing its identity. */
     public boolean clearCommittedLayout(long elementIdentity) {
         assertMutationAllowed();
         int slot = resolveActiveSlot(elementIdentity);
@@ -183,7 +186,17 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
-    /** Clears reached client and scroll metrics without disconnecting the element. */
+    public boolean clearCommittedOffset(long elementIdentity) {
+        assertMutationAllowed();
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0) {
+            return false;
+        }
+        states[slot] = (byte) (states[slot] & ~STATE_HAS_OFFSET);
+        offsetParents[slot] = 0L;
+        return true;
+    }
+
     public boolean clearCommittedClientAndScrollMetrics(long elementIdentity) {
         assertMutationAllowed();
         int slot = resolveActiveSlot(elementIdentity);
@@ -194,7 +207,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
-    /** Invalidates one exact mounted identity and makes its slot reusable with a new generation. */
     public boolean unmountElement(long elementIdentity) {
         assertMutationAllowed();
         int slot = resolveActiveSlot(elementIdentity);
@@ -203,9 +215,11 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         }
 
         states[slot] = 0;
+        offsetParents[slot] = 0L;
         int metadataIndex = slot * METADATA_STRIDE;
         metadata[metadataIndex + TAG_NAME_OFFSET] = null;
         metadata[metadataIndex + ID_OFFSET] = null;
+        publicInstances[slot] = null;
         activeCount--;
 
         long generation = generations[slot];
@@ -217,10 +231,34 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
-    /** Number of mounted identities, exposed for renderer lifecycle diagnostics. */
     public int getActiveElementCount() {
         assertOwnerThread();
         return activeCount;
+    }
+
+    @Override
+    public ReactNativeElement getPublicInstance(long elementIdentity) {
+        assertOwnerThread();
+        int slot = closed ? -1 : resolveActiveSlot(elementIdentity);
+        return slot < 0 ? null : publicInstances[slot];
+    }
+
+    @Override
+    public ReactNativeElement registerPublicInstance(
+            long elementIdentity,
+            ReactNativeElement publicInstance) {
+        assertMutationAllowed();
+        ReactNativeElement checked = Objects.requireNonNull(publicInstance, "publicInstance");
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0) {
+            throw new IllegalStateException("Cannot register a public instance for a stale element");
+        }
+        ReactNativeElement current = publicInstances[slot];
+        if (current != null && current != checked) {
+            throw new IllegalStateException("A different public instance is already registered");
+        }
+        publicInstances[slot] = checked;
+        return checked;
     }
 
     @Override
@@ -266,6 +304,28 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     }
 
     @Override
+    public boolean measureOffset(long elementIdentity, NativeElementOffsetSink sink) {
+        assertOwnerThread();
+        NativeElementOffsetSink checkedSink = Objects.requireNonNull(sink, "sink");
+        int slot = closed ? -1 : resolveActiveSlot(elementIdentity);
+        if (slot < 0 || (states[slot] & STATE_HAS_OFFSET) == 0) {
+            return false;
+        }
+
+        long parentIdentity = offsetParents[slot];
+        if (parentIdentity != 0L && resolveActiveSlot(parentIdentity) < 0) {
+            return false;
+        }
+        int layoutIndex = slot * LAYOUT_STRIDE;
+        checkedSink.setOffset(
+                parentIdentity != 0L,
+                parentIdentity,
+                layout[layoutIndex + OFFSET_TOP],
+                layout[layoutIndex + OFFSET_LEFT]);
+        return true;
+    }
+
+    @Override
     public double getClientWidth(long elementIdentity) {
         return readClientAndScrollMetric(elementIdentity, CLIENT_WIDTH);
     }
@@ -305,7 +365,6 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return readClientAndScrollMetric(elementIdentity, SCROLL_HEIGHT);
     }
 
-    /** Releases committed metadata and invalidates every identity on the owner Looper. */
     @Override
     public void close() {
         assertOwnerThread();
@@ -314,9 +373,11 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         }
         closed = true;
         generations = null;
+        offsetParents = null;
         nextFreeSlot = null;
         states = null;
         metadata = null;
+        publicInstances = null;
         layout = null;
         firstFreeSlot = -1;
         nextUnusedSlot = 0;
@@ -369,21 +430,27 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         }
 
         long[] newGenerations = new long[newCapacity];
+        long[] newOffsetParents = new long[newCapacity];
         int[] newNextFreeSlot = new int[newCapacity];
         byte[] newStates = new byte[newCapacity];
         String[] newMetadata = new String[newCapacity * METADATA_STRIDE];
+        ReactNativeElement[] newPublicInstances = new ReactNativeElement[newCapacity];
         double[] newLayout = new double[newCapacity * LAYOUT_STRIDE];
         if (currentCapacity != 0) {
             System.arraycopy(generations, 0, newGenerations, 0, currentCapacity);
+            System.arraycopy(offsetParents, 0, newOffsetParents, 0, currentCapacity);
             System.arraycopy(nextFreeSlot, 0, newNextFreeSlot, 0, currentCapacity);
             System.arraycopy(states, 0, newStates, 0, currentCapacity);
             System.arraycopy(metadata, 0, newMetadata, 0, currentCapacity * METADATA_STRIDE);
+            System.arraycopy(publicInstances, 0, newPublicInstances, 0, currentCapacity);
             System.arraycopy(layout, 0, newLayout, 0, currentCapacity * LAYOUT_STRIDE);
         }
         generations = newGenerations;
+        offsetParents = newOffsetParents;
         nextFreeSlot = newNextFreeSlot;
         states = newStates;
         metadata = newMetadata;
+        publicInstances = newPublicInstances;
         layout = newLayout;
     }
 
