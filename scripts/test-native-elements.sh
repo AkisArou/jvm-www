@@ -50,12 +50,28 @@ for required in \
   'private final io.github.akisarou.jvmwww.web.nativeelements.NativeElementContext context;' \
   'private final long elementIdentity;' \
   'boolean measureBoundingClientRect(long, boolean, io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink)' \
+  'double getClientWidth(long)' \
+  'double getClientHeight(long)' \
+  'double getClientTop(long)' \
+  'double getClientLeft(long)' \
+  'double getScrollLeft(long)' \
+  'double getScrollTop(long)' \
+  'double getScrollWidth(long)' \
+  'double getScrollHeight(long)' \
   'void setRect(double, double, double, double)' \
   'io.github.akisarou.jvmwww.web.geometry.DOMRect getBoundingClientRect()' \
   'double getOffsetWidth()' \
-  'double getOffsetHeight()'; do
+  'double getOffsetHeight()' \
+  'double getClientWidth()' \
+  'double getClientHeight()' \
+  'double getClientTop()' \
+  'double getClientLeft()' \
+  'double getScrollLeft()' \
+  'double getScrollTop()' \
+  'double getScrollWidth()' \
+  'double getScrollHeight()'; do
   if [[ "$shape" != *"$required"* ]]; then
-    printf 'Native element primitive/sink boundary is missing: %s\n' "$required" >&2
+    printf 'Native element primitive/scalar boundary is missing: %s\n' "$required" >&2
     exit 1
   fi
 done
@@ -64,8 +80,8 @@ host_shape="$(
   javap -classpath "$ELEMENT_CP" -p \
     io.github.akisarou.jvmwww.web.nativeelements.NativeElementHost
 )"
-if [[ "$host_shape" == *'DOMRect'* ]]; then
-  printf 'NativeElementHost must publish primitive rectangles through the reusable sink\n' >&2
+if [[ "$host_shape" == *'DOMRect'* ]] || [[ "$host_shape" == *'double[]'* ]]; then
+  printf 'NativeElementHost must publish rectangles through the reusable sink and metrics as scalars\n' >&2
   exit 1
 fi
 
@@ -104,12 +120,37 @@ fi
 
 offset_section="$(
   sed -n \
-    '/double getOffsetWidth(long)/,/private boolean measure(long, boolean)/p' \
+    '/double getOffsetWidth(long)/,/double getClientWidth(long)/p' \
     <<<"$context_code"
 )"
 if grep -Eq 'new[[:space:]]+#|newarray|anewarray|java/util/|java/lang/Double\.valueOf' \
     <<<"$offset_section"; then
   printf 'offsetWidth/offsetHeight must remain allocation-free primitive reads\n' >&2
+  exit 1
+fi
+
+metric_section="$(
+  sed -n \
+    '/double getClientWidth(long)/,/private boolean measure(long, boolean)/p' \
+    <<<"$context_code"
+)"
+for required in \
+  'NativeElementHost.getClientWidth' \
+  'NativeElementHost.getClientHeight' \
+  'NativeElementHost.getClientTop' \
+  'NativeElementHost.getClientLeft' \
+  'NativeElementHost.getScrollLeft' \
+  'NativeElementHost.getScrollTop' \
+  'NativeElementHost.getScrollWidth' \
+  'NativeElementHost.getScrollHeight'; do
+  if [[ "$metric_section" != *"$required"* ]]; then
+    printf 'Native element scalar metric path is missing direct host call: %s\n' "$required" >&2
+    exit 1
+  fi
+done
+if grep -Eq 'new[[:space:]]+#|newarray|anewarray|java/util/|java/lang/Double\.valueOf' \
+    <<<"$metric_section"; then
+  printf 'client and scroll metric reads must remain allocation-free scalar host calls\n' >&2
   exit 1
 fi
 

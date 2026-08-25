@@ -23,6 +23,15 @@ final class FakeNativeElementHost implements NativeElementHost {
     double transformedHeight;
     double width;
     double height;
+    boolean metricsAvailable;
+    double clientWidth;
+    double clientHeight;
+    double clientTop;
+    double clientLeft;
+    double scrollLeft;
+    double scrollTop;
+    double scrollWidth;
+    double scrollHeight;
     long identity;
     boolean includeTransform;
     int calls;
@@ -72,6 +81,52 @@ final class FakeNativeElementHost implements NativeElementHost {
         }
         if (mode == TWICE) sink.setRect(0.0, 0.0, 0.0, 0.0);
         return mode != FALSE_WRITE && available;
+    }
+
+    @Override
+    public double getClientWidth(long value) {
+        return metric(value, clientWidth);
+    }
+
+    @Override
+    public double getClientHeight(long value) {
+        return metric(value, clientHeight);
+    }
+
+    @Override
+    public double getClientTop(long value) {
+        return metric(value, clientTop);
+    }
+
+    @Override
+    public double getClientLeft(long value) {
+        return metric(value, clientLeft);
+    }
+
+    @Override
+    public double getScrollLeft(long value) {
+        return metric(value, scrollLeft);
+    }
+
+    @Override
+    public double getScrollTop(long value) {
+        return metric(value, scrollTop);
+    }
+
+    @Override
+    public double getScrollWidth(long value) {
+        return metric(value, scrollWidth);
+    }
+
+    @Override
+    public double getScrollHeight(long value) {
+        return metric(value, scrollHeight);
+    }
+
+    private double metric(long value, double metricValue) {
+        calls++;
+        identity = value;
+        return metricsAvailable ? metricValue : 0.0;
     }
 
     static final class Marker extends RuntimeException {

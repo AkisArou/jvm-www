@@ -8,9 +8,10 @@ import java.util.Objects;
 /**
  * Owner-confined committed-layout table for Android/native renderers.
  *
- * <p>The renderer publishes primitive metadata and both transformed and untransformed border-box
- * snapshots on one Android Looper. Web reads resolve an opaque generation-safe identity directly
- * against those arrays. No Android View or renderer object is retained or exposed.</p>
+ * <p>The renderer publishes primitive metadata, transformed and untransformed border boxes, and
+ * reached client/scroll metrics on one Android Looper. Web reads resolve an opaque generation-safe
+ * identity directly against those arrays. No Android View or renderer object is retained or
+ * exposed.</p>
  */
 public final class AndroidNativeElementHost implements NativeElementHost, AutoCloseable {
     private static final int INITIAL_CAPACITY = 16;
@@ -21,12 +22,13 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
 
     private static final byte STATE_ACTIVE = 1;
     private static final byte STATE_HAS_LAYOUT = 2;
+    private static final byte STATE_HAS_CLIENT_AND_SCROLL = 4;
 
     private static final int METADATA_STRIDE = 2;
     private static final int TAG_NAME_OFFSET = 0;
     private static final int ID_OFFSET = 1;
 
-    private static final int LAYOUT_STRIDE = 8;
+    private static final int LAYOUT_STRIDE = 16;
     private static final int TRANSFORMED_X = 0;
     private static final int TRANSFORMED_Y = 1;
     private static final int TRANSFORMED_WIDTH = 2;
@@ -35,6 +37,14 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     private static final int UNTRANSFORMED_Y = 5;
     private static final int UNTRANSFORMED_WIDTH = 6;
     private static final int UNTRANSFORMED_HEIGHT = 7;
+    private static final int CLIENT_WIDTH = 8;
+    private static final int CLIENT_HEIGHT = 9;
+    private static final int CLIENT_TOP = 10;
+    private static final int CLIENT_LEFT = 11;
+    private static final int SCROLL_LEFT = 12;
+    private static final int SCROLL_TOP = 13;
+    private static final int SCROLL_WIDTH = 14;
+    private static final int SCROLL_HEIGHT = 15;
 
     private final Looper looper;
 
@@ -128,6 +138,40 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
+    /**
+     * Atomically replaces the reached client-box, border-origin, and scroll metrics.
+     *
+     * <p>The values map directly to clientWidth, clientHeight, clientTop, clientLeft, scrollLeft,
+     * scrollTop, scrollWidth, and scrollHeight, in that order. They remain unrestricted doubles.</p>
+     */
+    public boolean commitClientAndScrollMetrics(
+            long elementIdentity,
+            double clientWidth,
+            double clientHeight,
+            double clientTop,
+            double clientLeft,
+            double scrollLeft,
+            double scrollTop,
+            double scrollWidth,
+            double scrollHeight) {
+        assertMutationAllowed();
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0) {
+            return false;
+        }
+        int layoutIndex = slot * LAYOUT_STRIDE;
+        layout[layoutIndex + CLIENT_WIDTH] = clientWidth;
+        layout[layoutIndex + CLIENT_HEIGHT] = clientHeight;
+        layout[layoutIndex + CLIENT_TOP] = clientTop;
+        layout[layoutIndex + CLIENT_LEFT] = clientLeft;
+        layout[layoutIndex + SCROLL_LEFT] = scrollLeft;
+        layout[layoutIndex + SCROLL_TOP] = scrollTop;
+        layout[layoutIndex + SCROLL_WIDTH] = scrollWidth;
+        layout[layoutIndex + SCROLL_HEIGHT] = scrollHeight;
+        states[slot] = (byte) (states[slot] | STATE_HAS_CLIENT_AND_SCROLL);
+        return true;
+    }
+
     /** Makes a mounted element temporarily layout-unavailable without changing its identity. */
     public boolean clearCommittedLayout(long elementIdentity) {
         assertMutationAllowed();
@@ -136,6 +180,17 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
             return false;
         }
         states[slot] = (byte) (states[slot] & ~STATE_HAS_LAYOUT);
+        return true;
+    }
+
+    /** Clears reached client and scroll metrics without disconnecting the element. */
+    public boolean clearCommittedClientAndScrollMetrics(long elementIdentity) {
+        assertMutationAllowed();
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0) {
+            return false;
+        }
+        states[slot] = (byte) (states[slot] & ~STATE_HAS_CLIENT_AND_SCROLL);
         return true;
     }
 
@@ -210,6 +265,46 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
+    @Override
+    public double getClientWidth(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, CLIENT_WIDTH);
+    }
+
+    @Override
+    public double getClientHeight(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, CLIENT_HEIGHT);
+    }
+
+    @Override
+    public double getClientTop(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, CLIENT_TOP);
+    }
+
+    @Override
+    public double getClientLeft(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, CLIENT_LEFT);
+    }
+
+    @Override
+    public double getScrollLeft(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, SCROLL_LEFT);
+    }
+
+    @Override
+    public double getScrollTop(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, SCROLL_TOP);
+    }
+
+    @Override
+    public double getScrollWidth(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, SCROLL_WIDTH);
+    }
+
+    @Override
+    public double getScrollHeight(long elementIdentity) {
+        return readClientAndScrollMetric(elementIdentity, SCROLL_HEIGHT);
+    }
+
     /** Releases committed metadata and invalidates every identity on the owner Looper. */
     @Override
     public void close() {
@@ -231,6 +326,15 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     public boolean isClosed() {
         assertOwnerThread();
         return closed;
+    }
+
+    private double readClientAndScrollMetric(long elementIdentity, int metricOffset) {
+        assertOwnerThread();
+        int slot = closed ? -1 : resolveActiveSlot(elementIdentity);
+        if (slot < 0 || (states[slot] & STATE_HAS_CLIENT_AND_SCROLL) == 0) {
+            return 0.0;
+        }
+        return layout[slot * LAYOUT_STRIDE + metricOffset];
     }
 
     private int allocateSlot() {

@@ -45,6 +45,7 @@ host_shape="$(
 )"
 for required in \
   'implements io.github.akisarou.jvmwww.web.nativeelements.NativeElementHost,java.lang.AutoCloseable' \
+  'private static final byte STATE_HAS_CLIENT_AND_SCROLL;' \
   'private final android.os.Looper looper;' \
   'private long[] generations;' \
   'private int[] nextFreeSlot;' \
@@ -58,9 +59,20 @@ for required in \
   'long mountElement(java.lang.String, java.lang.String)' \
   'boolean commitMetadata(long, java.lang.String, java.lang.String)' \
   'boolean commitLayout(long, double, double, double, double, double, double, double, double)' \
+  'boolean commitClientAndScrollMetrics(long, double, double, double, double, double, double, double, double)' \
   'boolean clearCommittedLayout(long)' \
+  'boolean clearCommittedClientAndScrollMetrics(long)' \
   'boolean unmountElement(long)' \
-  'boolean measureBoundingClientRect(long, boolean, io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink)'; do
+  'boolean measureBoundingClientRect(long, boolean, io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink)' \
+  'double getClientWidth(long)' \
+  'double getClientHeight(long)' \
+  'double getClientTop(long)' \
+  'double getClientLeft(long)' \
+  'double getScrollLeft(long)' \
+  'double getScrollTop(long)' \
+  'double getScrollWidth(long)' \
+  'double getScrollHeight(long)' \
+  'private double readClientAndScrollMetric(long, int)'; do
   if [[ "$host_shape" != *"$required"* ]]; then
     printf 'Android native element host boundary is missing: %s\n' "$required" >&2
     exit 1
@@ -80,31 +92,66 @@ host_code="$(
 )"
 measure_section="$(
   sed -n \
-    '/public boolean measureBoundingClientRect(long, boolean, io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink)/,/public void close()/p' \
+    '/public boolean measureBoundingClientRect(long, boolean, io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink)/,/public double getClientWidth(long)/p' \
     <<<"$host_code"
 )"
 if [[ "$measure_section" != *'NativeElementRectSink.setRect'* ]]; then
-  printf 'Android measurement must publish directly through the caller reusable rectangle sink\n' >&2
+  printf 'Android rectangle measurement must publish directly through the caller reusable sink\n' >&2
   exit 1
 fi
 if grep -Eq \
   'new[[:space:]]+#|newarray|anewarray|java/util/(ArrayList|LinkedList|ArrayDeque|HashMap|Map|List)|java/lang/(Double|Long)\.valueOf' \
   <<<"$measure_section"; then
-  printf 'Android measurement must allocate no result, tuple, collection, or boxed coordinate\n' >&2
+  printf 'Android rectangle measurement must allocate no result, tuple, collection, or boxed coordinate\n' >&2
   exit 1
 fi
 
-commit_section="$(
+metric_getter_section="$(
   sed -n \
-    '/public boolean commitLayout(long, double, double, double, double, double, double, double, double)/,/public boolean clearCommittedLayout(long)/p' \
+    '/public double getClientWidth(long)/,/public void close()/p' \
     <<<"$host_code"
 )"
 if grep -Eq \
   'new[[:space:]]+#|newarray|anewarray|java/util/|java/lang/(Double|Long)\.valueOf' \
-  <<<"$commit_section"; then
-  printf 'Committed layout publication must remain an allocation-free primitive array update\n' >&2
+  <<<"$metric_getter_section"; then
+  printf 'Android client and scroll getters must remain allocation-free scalar reads\n' >&2
   exit 1
 fi
+
+metric_read_section="$(
+  sed -n \
+    '/private double readClientAndScrollMetric(long, int)/,/private int allocateSlot()/p' \
+    <<<"$host_code"
+)"
+if [[ "$metric_read_section" != *'daload'* ]]; then
+  printf 'Android client and scroll metrics must read directly from the committed primitive table\n' >&2
+  exit 1
+fi
+if grep -Eq \
+  'new[[:space:]]+#|newarray|anewarray|java/util/|java/lang/(Double|Long)\.valueOf' \
+  <<<"$metric_read_section"; then
+  printf 'Android metric resolution must allocate no result, tuple, collection, or boxed coordinate\n' >&2
+  exit 1
+fi
+
+layout_commit_section="$(
+  sed -n \
+    '/public boolean commitLayout(long, double, double, double, double, double, double, double, double)/,/public boolean commitClientAndScrollMetrics/p' \
+    <<<"$host_code"
+)"
+metrics_commit_section="$(
+  sed -n \
+    '/public boolean commitClientAndScrollMetrics(long, double, double, double, double, double, double, double, double)/,/public boolean clearCommittedLayout(long)/p' \
+    <<<"$host_code"
+)"
+for section in "$layout_commit_section" "$metrics_commit_section"; do
+  if grep -Eq \
+    'new[[:space:]]+#|newarray|anewarray|java/util/|java/lang/(Double|Long)\.valueOf' \
+    <<<"$section"; then
+    printf 'Committed layout and metric publication must remain allocation-free primitive array updates\n' >&2
+    exit 1
+  fi
+done
 
 mount_section="$(
   sed -n \

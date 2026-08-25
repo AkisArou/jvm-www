@@ -9,7 +9,7 @@ import io.github.akisarou.jvmwww.web.nativeelements.NativeElementHost;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink;
 import io.github.akisarou.jvmwww.web.nativeelements.ReactNativeElement;
 
-/** Deterministic Java 8 conformance for the first renderer-owned element profile. */
+/** Deterministic Java 8 conformance for the reached renderer-owned element profile. */
 public final class NativeElementConformance {
     private int passed;
 
@@ -21,6 +21,7 @@ public final class NativeElementConformance {
         metadata();
         bounds();
         offsets();
+        clientAndScrollMetrics();
         detached();
         malformedHost();
         reentry();
@@ -114,6 +115,46 @@ public final class NativeElementConformance {
         passed++;
     }
 
+    private void clientAndScrollMetrics() {
+        RuntimeInstance runtime = runtime();
+        FakeNativeElementHost host = new FakeNativeElementHost();
+        host.metricsAvailable = true;
+        host.clientWidth = 10.5;
+        host.clientHeight = -2.25;
+        host.clientTop = -0.0;
+        host.clientLeft = Double.NaN;
+        host.scrollLeft = -14.75;
+        host.scrollTop = Double.NEGATIVE_INFINITY;
+        host.scrollWidth = 100.125;
+        host.scrollHeight = Double.POSITIVE_INFINITY;
+        runtime.enterHostTurn();
+        try {
+            ReactNativeElement element = new NativeElementContext(runtime, host).createElement(81L);
+            raw(10.5, element.getClientWidth(), "client width stays fractional");
+            raw(-2.25, element.getClientHeight(), "client height unrestricted");
+            raw(-0.0, element.getClientTop(), "client top negative zero");
+            yes(Double.isNaN(element.getClientLeft()), "client left NaN");
+            raw(-14.75, element.getScrollLeft(), "scroll left");
+            raw(Double.NEGATIVE_INFINITY, element.getScrollTop(), "scroll top infinity");
+            raw(100.125, element.getScrollWidth(), "scroll width fractional");
+            raw(Double.POSITIVE_INFINITY, element.getScrollHeight(), "scroll height infinity");
+            eq(81L, host.identity, "metric identity");
+
+            host.metricsAvailable = false;
+            raw(0.0, element.getClientWidth(), "unavailable client width");
+            raw(0.0, element.getClientHeight(), "unavailable client height");
+            raw(0.0, element.getClientTop(), "unavailable client top");
+            raw(0.0, element.getClientLeft(), "unavailable client left");
+            raw(0.0, element.getScrollLeft(), "unavailable scroll left");
+            raw(0.0, element.getScrollTop(), "unavailable scroll top");
+            raw(0.0, element.getScrollWidth(), "unavailable scroll width");
+            raw(0.0, element.getScrollHeight(), "unavailable scroll height");
+        } finally {
+            closeTurn(runtime);
+        }
+        passed++;
+    }
+
     private void detached() {
         RuntimeInstance runtime = runtime();
         FakeNativeElementHost host = new FakeNativeElementHost();
@@ -131,6 +172,8 @@ public final class NativeElementConformance {
             rect(first, 0.0, 0.0, 0.0, 0.0, "detached rect");
             eq(0.0, element.getOffsetWidth(), "detached width");
             eq(0.0, element.getOffsetHeight(), "detached height");
+            raw(0.0, element.getClientWidth(), "detached client width");
+            raw(0.0, element.getScrollHeight(), "detached scroll height");
         } finally {
             closeTurn(runtime);
         }
@@ -210,8 +253,8 @@ public final class NativeElementConformance {
             runtime.leaveHostTurn();
         }
         try {
-            element[0].getNodeType();
-            throw new AssertionError("idle access accepted");
+            element[0].getClientWidth();
+            throw new AssertionError("idle metric access accepted");
         } catch (IllegalStateException expected) {
             // expected
         }
@@ -221,7 +264,7 @@ public final class NativeElementConformance {
             @Override
             public void run() {
                 try {
-                    element[0].isConnected();
+                    element[0].getScrollTop();
                 } catch (Throwable error) {
                     failure[0] = error;
                 }
@@ -229,13 +272,13 @@ public final class NativeElementConformance {
         });
         thread.start();
         thread.join();
-        yes(failure[0] instanceof IllegalStateException, "foreign access");
+        yes(failure[0] instanceof IllegalStateException, "foreign metric access");
         eq(before, host.calls, "foreign check precedes host");
         runtime.close();
         before = host.calls;
         try {
-            element[0].isConnected();
-            throw new AssertionError("closed access accepted");
+            element[0].getScrollWidth();
+            throw new AssertionError("closed metric access accepted");
         } catch (IllegalStateException expected) {
             // expected
         }
@@ -301,8 +344,7 @@ public final class NativeElementConformance {
 
     private static void raw(double expected, double actual, String label) {
         if (Double.doubleToRawLongBits(expected) != Double.doubleToRawLongBits(actual)) {
-            throw new AssertionError(label);
+            throw new AssertionError(label + ": " + actual);
         }
     }
-
 }

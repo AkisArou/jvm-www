@@ -18,7 +18,8 @@ public final class AndroidNativeElementHostConformance {
         factoryAndOwnerIdentity();
         mountMetadataAndConnection();
         transformedAndUntransformedLayout();
-        layoutAvailabilityAndMetadataCommits();
+        clientAndScrollMetrics();
+        availabilityAndMetadataCommits();
         generationSafeReuseAndGrowth();
         foreignThreadRefusal();
         closeInvalidatesAndReleases();
@@ -100,7 +101,47 @@ public final class AndroidNativeElementHostConformance {
         pass();
     }
 
-    private void layoutAvailabilityAndMetadataCommits() {
+    private void clientAndScrollMetrics() {
+        AndroidNativeElementHost host = AndroidNativeElementHost.forCurrentLooper();
+        long identity = host.mountElement("ScrollView", "list");
+        assertZeroMetrics(host, identity, "initial");
+
+        yes(host.commitClientAndScrollMetrics(
+                identity,
+                100.5,
+                -20.25,
+                -0.0,
+                Double.NaN,
+                -3.75,
+                Double.NEGATIVE_INFINITY,
+                1000.125,
+                Double.POSITIVE_INFINITY),
+                "metrics committed");
+        raw(100.5, host.getClientWidth(identity), "client width");
+        raw(-20.25, host.getClientHeight(identity), "client height");
+        raw(-0.0, host.getClientTop(identity), "client top");
+        yes(Double.isNaN(host.getClientLeft(identity)), "client left NaN");
+        raw(-3.75, host.getScrollLeft(identity), "scroll left");
+        raw(Double.NEGATIVE_INFINITY, host.getScrollTop(identity), "scroll top");
+        raw(1000.125, host.getScrollWidth(identity), "scroll width");
+        raw(Double.POSITIVE_INFINITY, host.getScrollHeight(identity), "scroll height");
+
+        yes(host.commitClientAndScrollMetrics(
+                identity, 1, 2, 3, 4, 5, 6, 7, 8), "metrics replaced");
+        raw(1.0, host.getClientWidth(identity), "replaced client width");
+        raw(8.0, host.getScrollHeight(identity), "replaced scroll height");
+        yes(host.clearCommittedClientAndScrollMetrics(identity), "metrics cleared");
+        assertZeroMetrics(host, identity, "cleared");
+        yes(host.isConnected(identity), "metrics clear keeps connection");
+
+        no(host.commitClientAndScrollMetrics(
+                Long.MAX_VALUE, 0,0,0,0,0,0,0,0), "stale metrics rejected");
+        no(host.clearCommittedClientAndScrollMetrics(Long.MAX_VALUE), "stale metric clear rejected");
+        host.close();
+        pass();
+    }
+
+    private void availabilityAndMetadataCommits() {
         AndroidNativeElementHost host = AndroidNativeElementHost.forCurrentLooper();
         long identity = host.mountElement("View", "before");
         RecordingSink sink = new RecordingSink();
@@ -111,14 +152,25 @@ public final class AndroidNativeElementHostConformance {
         eq("Image", host.getTagName(identity), "updated tag");
         eq("after", host.getId(identity), "updated id");
         yes(host.commitLayout(identity, 1, 2, 3, 4, 5, 6, 7, 8), "first layout");
+        yes(host.commitClientAndScrollMetrics(
+                identity, 9, 10, 11, 12, 13, 14, 15, 16), "first metrics");
+
         yes(host.clearCommittedLayout(identity), "layout cleared");
-        no(host.measureBoundingClientRect(identity, false, sink), "cleared unavailable");
+        no(host.measureBoundingClientRect(identity, false, sink), "cleared layout unavailable");
         eq(0, sink.writes, "cleared layout writes nothing");
-        yes(host.isConnected(identity), "layout clear keeps connection");
+        raw(9.0, host.getClientWidth(identity), "layout clear keeps metrics");
+
+        yes(host.commitLayout(identity, 21,22,23,24,25,26,27,28), "layout restored");
+        yes(host.clearCommittedClientAndScrollMetrics(identity), "metrics cleared separately");
+        assertZeroMetrics(host, identity, "metrics unavailable");
+        sink.reset();
+        yes(host.measureBoundingClientRect(identity, true, sink), "metric clear keeps layout");
+        sink.assertRect(21,22,23,24,"layout retained");
+        yes(host.isConnected(identity), "availability clears keep connection");
 
         no(host.commitMetadata(Long.MAX_VALUE, "x", "y"), "stale metadata rejected");
         no(host.commitLayout(Long.MAX_VALUE, 0,0,0,0,0,0,0,0), "stale layout rejected");
-        no(host.clearCommittedLayout(Long.MAX_VALUE), "stale clear rejected");
+        no(host.clearCommittedLayout(Long.MAX_VALUE), "stale layout clear rejected");
         host.close();
         pass();
     }
@@ -134,6 +186,7 @@ public final class AndroidNativeElementHostConformance {
         yes(host.isConnected(reused), "reused slot connected");
         eq("new", host.getId(reused), "reused metadata isolated");
         no(host.unmountElement(first), "stale unmount rejected");
+        assertZeroMetrics(host, reused, "reused metric isolation");
 
         long current = reused;
         for (int iteration = 0; iteration < 10000; iteration++) {
@@ -152,11 +205,17 @@ public final class AndroidNativeElementHostConformance {
                     index, index + 1, index + 2, index + 3,
                     index + 4, index + 5, index + 6, index + 7),
                     "growth layout " + index);
+            yes(host.commitClientAndScrollMetrics(
+                    identities[index],
+                    index + 8, index + 9, index + 10, index + 11,
+                    index + 12, index + 13, index + 14, index + 15),
+                    "growth metrics " + index);
         }
         eq(129, host.getActiveElementCount(), "growth active count");
         RecordingSink sink = new RecordingSink();
         yes(host.measureBoundingClientRect(identities[127], false, sink), "grown table resolves tail");
         sink.assertRect(131, 132, 133, 134, "grown tail");
+        raw(142.0, host.getScrollHeight(identities[127]), "grown metric tail");
         host.close();
         pass();
     }
@@ -164,6 +223,7 @@ public final class AndroidNativeElementHostConformance {
     private void foreignThreadRefusal() throws Exception {
         final AndroidNativeElementHost host = AndroidNativeElementHost.forCurrentLooper();
         final long identity = host.mountElement("View", "owner");
+        host.commitClientAndScrollMetrics(identity, 1,2,3,4,5,6,7,8);
         final AtomicReference<Throwable> firstFailure = new AtomicReference<Throwable>();
         final AtomicReference<Throwable> secondFailure = new AtomicReference<Throwable>();
         Thread thread = new Thread(new Runnable() {
@@ -171,12 +231,12 @@ public final class AndroidNativeElementHostConformance {
             public void run() {
                 Looper.prepare();
                 try {
-                    host.isConnected(identity);
+                    host.getScrollTop(identity);
                 } catch (Throwable error) {
                     firstFailure.set(error);
                 }
                 try {
-                    host.commitMetadata(identity, "Bad", "foreign");
+                    host.commitClientAndScrollMetrics(identity, 9,9,9,9,9,9,9,9);
                 } catch (Throwable error) {
                     secondFailure.set(error);
                 }
@@ -184,10 +244,10 @@ public final class AndroidNativeElementHostConformance {
         });
         thread.start();
         thread.join();
-        instanceOf(IllegalStateException.class, firstFailure.get(), "foreign read refused");
-        instanceOf(IllegalStateException.class, secondFailure.get(), "foreign write refused");
-        eq("View", host.getTagName(identity), "foreign write made no change");
-        eq("owner", host.getId(identity), "foreign id made no change");
+        instanceOf(IllegalStateException.class, firstFailure.get(), "foreign metric read refused");
+        instanceOf(IllegalStateException.class, secondFailure.get(), "foreign metric write refused");
+        raw(6.0, host.getScrollTop(identity), "foreign metric write made no change");
+        eq("View", host.getTagName(identity), "foreign state intact");
         host.close();
         pass();
     }
@@ -196,6 +256,7 @@ public final class AndroidNativeElementHostConformance {
         AndroidNativeElementHost host = AndroidNativeElementHost.forCurrentLooper();
         long identity = host.mountElement("View", "closing");
         host.commitLayout(identity, 1,2,3,4,5,6,7,8);
+        host.commitClientAndScrollMetrics(identity, 9,10,11,12,13,14,15,16);
         host.close();
         yes(host.isClosed(), "closed flag");
         eq(0, host.getActiveElementCount(), "closed count");
@@ -205,6 +266,7 @@ public final class AndroidNativeElementHostConformance {
         RecordingSink sink = new RecordingSink();
         no(host.measureBoundingClientRect(identity, true, sink), "closed measurement unavailable");
         eq(0, sink.writes, "closed measurement writes nothing");
+        assertZeroMetrics(host, identity, "closed metrics");
         host.close();
         try {
             host.mountElement("View", "late");
@@ -213,6 +275,18 @@ public final class AndroidNativeElementHostConformance {
             // Expected.
         }
         pass();
+    }
+
+    private static void assertZeroMetrics(
+            AndroidNativeElementHost host, long identity, String label) {
+        raw(0.0, host.getClientWidth(identity), label + " client width");
+        raw(0.0, host.getClientHeight(identity), label + " client height");
+        raw(0.0, host.getClientTop(identity), label + " client top");
+        raw(0.0, host.getClientLeft(identity), label + " client left");
+        raw(0.0, host.getScrollLeft(identity), label + " scroll left");
+        raw(0.0, host.getScrollTop(identity), label + " scroll top");
+        raw(0.0, host.getScrollWidth(identity), label + " scroll width");
+        raw(0.0, host.getScrollHeight(identity), label + " scroll height");
     }
 
     private void pass() { passed++; }

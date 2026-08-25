@@ -9,7 +9,8 @@ import java.util.Objects;
  *
  * <p>One context is retained by every element wrapper belonging to a renderer/runtime pair. The
  * context itself is reused as the host's measurement sink, avoiding a callback or tuple allocation
- * for each layout read.</p>
+ * for each multi-value layout read. Scalar client and scroll properties delegate directly through
+ * the primitive identity and allocate nothing.</p>
  */
 public final class NativeElementContext implements NativeElementRectSink {
     private final RuntimeInstance runtime;
@@ -81,6 +82,46 @@ public final class NativeElementContext implements NativeElementRectSink {
 
     double getOffsetHeight(long elementIdentity) {
         return measure(elementIdentity, false) ? roundLikeEcmaScript(measuredHeight) : 0.0;
+    }
+
+    double getClientWidth(long elementIdentity) {
+        assertAccess();
+        return host.getClientWidth(elementIdentity);
+    }
+
+    double getClientHeight(long elementIdentity) {
+        assertAccess();
+        return host.getClientHeight(elementIdentity);
+    }
+
+    double getClientTop(long elementIdentity) {
+        assertAccess();
+        return host.getClientTop(elementIdentity);
+    }
+
+    double getClientLeft(long elementIdentity) {
+        assertAccess();
+        return host.getClientLeft(elementIdentity);
+    }
+
+    double getScrollLeft(long elementIdentity) {
+        assertAccess();
+        return host.getScrollLeft(elementIdentity);
+    }
+
+    double getScrollTop(long elementIdentity) {
+        assertAccess();
+        return host.getScrollTop(elementIdentity);
+    }
+
+    double getScrollWidth(long elementIdentity) {
+        assertAccess();
+        return host.getScrollWidth(elementIdentity);
+    }
+
+    double getScrollHeight(long elementIdentity) {
+        assertAccess();
+        return host.getScrollHeight(elementIdentity);
     }
 
     private boolean measure(long elementIdentity, boolean includeTransform) {

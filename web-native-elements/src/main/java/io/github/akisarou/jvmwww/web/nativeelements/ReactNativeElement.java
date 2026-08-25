@@ -65,4 +65,36 @@ public final class ReactNativeElement {
     public double getOffsetHeight() {
         return context.getOffsetHeight(elementIdentity);
     }
+
+    public double getClientWidth() {
+        return context.getClientWidth(elementIdentity);
+    }
+
+    public double getClientHeight() {
+        return context.getClientHeight(elementIdentity);
+    }
+
+    public double getClientTop() {
+        return context.getClientTop(elementIdentity);
+    }
+
+    public double getClientLeft() {
+        return context.getClientLeft(elementIdentity);
+    }
+
+    public double getScrollLeft() {
+        return context.getScrollLeft(elementIdentity);
+    }
+
+    public double getScrollTop() {
+        return context.getScrollTop(elementIdentity);
+    }
+
+    public double getScrollWidth() {
+        return context.getScrollWidth(elementIdentity);
+    }
+
+    public double getScrollHeight() {
+        return context.getScrollHeight(elementIdentity);
+    }
 }
