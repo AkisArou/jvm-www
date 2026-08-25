@@ -142,13 +142,11 @@ collection_read_section="$(
 )"
 for required in \
   'getChildElementCount' \
-  'NativeElementHost.readFirstElementChild' \
-  'NativeElementHost.readParentElement' \
-  'NativeElementHost.readNextElementSibling' \
+  'readRelatedElementIdentity' \
   'NativeElementHost.getId' \
   'createElement'; do
   if [[ "$collection_read_section" != *"$required"* ]]; then
-    printf 'Live collection traversal is missing direct primitive operation: %s\n' "$required" >&2
+    printf 'Live collection traversal is missing direct helper/scalar operation: %s\n' "$required" >&2
     exit 1
   fi
 done
