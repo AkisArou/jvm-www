@@ -9,8 +9,8 @@ import java.util.Objects;
  *
  * <p>One context is retained by every element wrapper belonging to a renderer/runtime pair. The
  * context itself is reused as the host's rectangle, offset, and element-relation sink, avoiding a
- * callback or tuple allocation for each multi-value read. Scalar client, scroll, and child-count
- * properties delegate directly through the primitive identity and allocate nothing.</p>
+ * callback or tuple allocation for each multi-value read. Scalar client, scroll, child-count,
+ * identity, and containment operations delegate through primitive state and allocate nothing.</p>
  */
 public final class NativeElementContext
         implements NativeElementRectSink, NativeElementOffsetSink, NativeElementRelationSink {
@@ -137,6 +137,50 @@ public final class NativeElementContext
         assertAccess();
         String value = host.getId(elementIdentity);
         return value == null ? "" : value;
+    }
+
+    /**
+     * Returns whether {@code otherIdentity} is an inclusive descendant of the queried element.
+     *
+     * <p>The walk follows the current primitive parent-element relation. Brent cycle detection keeps
+     * malformed renderer graphs bounded without allocating an ancestor set or exposing intermediate
+     * public wrappers.</p>
+     */
+    boolean contains(
+            long inclusiveAncestorIdentity,
+            NativeElementContext otherContext,
+            long otherIdentity) {
+        assertAccess();
+        if (otherContext != this) {
+            return false;
+        }
+        if (inclusiveAncestorIdentity == otherIdentity) {
+            return true;
+        }
+
+        long currentIdentity = otherIdentity;
+        long cycleAnchorIdentity = currentIdentity;
+        long cyclePower = 1L;
+        long cycleLength = 0L;
+        while (readRelatedElementIdentity(currentIdentity, RELATION_PARENT_ELEMENT)) {
+            currentIdentity = measuredRelatedElementIdentity;
+            if (currentIdentity == inclusiveAncestorIdentity) {
+                return true;
+            }
+            if (currentIdentity == cycleAnchorIdentity) {
+                return false;
+            }
+
+            cycleLength++;
+            if (cycleLength == cyclePower) {
+                cycleAnchorIdentity = currentIdentity;
+                cyclePower = cyclePower <= (Long.MAX_VALUE >>> 1)
+                        ? cyclePower << 1
+                        : Long.MAX_VALUE;
+                cycleLength = 0L;
+            }
+        }
+        return false;
     }
 
     DOMRect getBoundingClientRect(long elementIdentity) {

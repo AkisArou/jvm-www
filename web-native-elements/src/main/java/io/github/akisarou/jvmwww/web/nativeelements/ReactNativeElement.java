@@ -7,7 +7,7 @@ import io.github.akisarou.jvmwww.web.geometry.DOMRect;
  * Read-only renderer-owned element value for the selected React Native element-node profile.
  *
  * <p>The renderer creates and caches wrappers through {@link NativeElementContext}. Tree mutation,
- * node-level traversal, Android view access, asynchronous legacy measurement, focus, pointer
+ * unsupported node kinds, Android view access, asynchronous legacy measurement, focus, pointer
  * capture, and document traversal are separate capability slices.</p>
  */
 public final class ReactNativeElement {
@@ -50,6 +50,25 @@ public final class ReactNativeElement {
     public String getNodeValue() {
         context.assertAccess();
         return null;
+    }
+
+    /** Returns true when {@code other} is this exact public node object. */
+    public boolean isSameNode(ReactNativeElement other) {
+        context.assertAccess();
+        return this == other;
+    }
+
+    /**
+     * Returns whether {@code other} is an inclusive element descendant of this element.
+     *
+     * <p>Null and elements from another renderer context return false. The current primitive parent
+     * relation is followed without allocating ancestor collections or intermediate wrappers.</p>
+     */
+    public boolean contains(ReactNativeElement other) {
+        if (other == null) {
+            return context.contains(elementIdentity, null, 0L);
+        }
+        return context.contains(elementIdentity, other.context, other.elementIdentity);
     }
 
     /** Returns the stable public wrapper for the current parent element. */
