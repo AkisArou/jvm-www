@@ -16,6 +16,12 @@ The project exists to support TypeScript compiled to Java/DEX and executed by AR
 
 React Native is useful as an API inventory and integration reference. ECMAScript, WHATWG specifications, and Native TypeScript's selected compatibility profile define behavior.
 
+## Long-term ownership boundary
+
+`jvm-www` is the permanent home of the hand-written **ScriptC JVM runtime and Android platform hosts**, not the final semantic home of every portable Web or renderer API currently implemented in Java. Promise/`async` runtime machinery, microtask/host-task scheduling, JVM timer kernels, Android `Looper`/frame/idle integration, OkHttp transports, Android logging/UI hosts, selected measured intrinsics, and JVM/Android conformance stay here. Portable Web-library and renderer semantics should migrate to shared TypeScript and compile through ScriptC to each target once the JVM backend can consume them directly.
+
+The exact module-by-module disposition, JNI policy, renderer ownership, migration order, and completion criteria are recorded in [ADR 0037: Keep JVM backend primitives and platform hosts in `jvm-www`](docs/decisions/0037-scriptc-jvm-backend-ownership.md).
+
 ## Current slice
 
 The current implementation provides a pure-Java `RuntimeInstance`, Promise core, compiler-facing async-frame ABI, logical timeout/interval timers, Android Handler host, platform Promise adapter, owner-confined events and abort signals, exact UTF-8 Encoding API objects, an owner-confined Console core, a buffered transport-independent Fetch core, and an OkHttp Fetch transport with:
@@ -170,4 +176,4 @@ The intended default is a mobile Web profile:
 - Node-only ordering such as `process.nextTick` is excluded unless an explicit Node-compatibility profile is selected;
 - unsupported shapes fail precisely rather than being silently approximated.
 
-See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), [decision 0003](docs/decisions/0003-android-handler-runtime-host.md), [decision 0004](docs/decisions/0004-fused-platform-promise.md), [decision 0005](docs/decisions/0005-owner-confined-web-events-and-abort.md), [decision 0006](docs/decisions/0006-buffered-fetch-core.md), [decision 0007](docs/decisions/0007-buffered-okhttp-fetch-transport.md), [decision 0008](docs/decisions/0008-exact-utf8-encoding-api.md), [decision 0009](docs/decisions/0009-owner-confined-console.md), and the [`Web/API inventory`](docs/web-api-inventory.md).
+See [`docs/architecture.md`](docs/architecture.md), [decision 0001](docs/decisions/0001-fused-async-frame.md), [decision 0002](docs/decisions/0002-one-armed-logical-timers.md), [decision 0003](docs/decisions/0003-android-handler-runtime-host.md), [decision 0004](docs/decisions/0004-fused-platform-promise.md), [decision 0005](docs/decisions/0005-owner-confined-web-events-and-abort.md), [decision 0006](docs/decisions/0006-buffered-fetch-core.md), [decision 0007](docs/decisions/0007-buffered-okhttp-fetch-transport.md), [decision 0008](docs/decisions/0008-exact-utf8-encoding-api.md), [decision 0009](docs/decisions/0009-owner-confined-console.md), [decision 0037](docs/decisions/0037-scriptc-jvm-backend-ownership.md), and the [`Web/API inventory`](docs/web-api-inventory.md).
