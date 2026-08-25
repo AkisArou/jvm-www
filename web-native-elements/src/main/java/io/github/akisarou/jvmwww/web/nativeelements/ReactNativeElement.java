@@ -7,14 +7,15 @@ import io.github.akisarou.jvmwww.web.geometry.DOMRect;
  * Read-only renderer-owned element value for the selected React Native element-node profile.
  *
  * <p>The renderer creates and caches wrappers through {@link NativeElementContext}. Tree mutation,
- * node-level traversal, child collections, Android view access, asynchronous legacy measurement,
- * focus, pointer capture, and document traversal are separate capability slices.</p>
+ * node-level traversal, Android view access, asynchronous legacy measurement, focus, pointer
+ * capture, and document traversal are separate capability slices.</p>
  */
 public final class ReactNativeElement {
     public static final int ELEMENT_NODE = 1;
 
     private final NativeElementContext context;
     private final long elementIdentity;
+    private HTMLCollection children;
 
     ReactNativeElement(NativeElementContext context, long elementIdentity) {
         this.context = context;
@@ -79,6 +80,22 @@ public final class ReactNativeElement {
     /** Returns the current number of element children in the renderer snapshot. */
     public int getChildElementCount() {
         return context.getChildElementCount(elementIdentity);
+    }
+
+    /**
+     * Returns this element's live same-object direct-element collection.
+     *
+     * <p>The collection is allocated only on first access and then retained by this already-required
+     * public wrapper. It does not snapshot or retain child wrappers.</p>
+     */
+    public HTMLCollection getChildren() {
+        context.assertAccess();
+        HTMLCollection current = children;
+        if (current == null) {
+            current = new HTMLCollection(context, elementIdentity);
+            children = current;
+        }
+        return current;
     }
 
     /** Returns one static transformed border-box snapshot. */

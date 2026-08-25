@@ -328,9 +328,84 @@ public final class NativeElementContext
         return count;
     }
 
+    ReactNativeElement getElementChildAt(long parentIdentity, int index) {
+        assertAccess();
+        if (index < 0) {
+            return null;
+        }
+        int count = getChildElementCount(parentIdentity);
+        if (index >= count || !readRelatedElementIdentity(
+                parentIdentity, RELATION_FIRST_ELEMENT_CHILD)) {
+            return null;
+        }
+
+        long firstIdentity = measuredRelatedElementIdentity;
+        long currentIdentity = firstIdentity;
+        for (int position = 0; position <= index; position++) {
+            if (!readRelatedElementIdentity(currentIdentity, RELATION_PARENT_ELEMENT)
+                    || measuredRelatedElementIdentity != parentIdentity) {
+                return null;
+            }
+            if (position == index) {
+                return createElement(currentIdentity);
+            }
+            if (!readRelatedElementIdentity(
+                    currentIdentity, RELATION_NEXT_ELEMENT_SIBLING)) {
+                return null;
+            }
+            long nextIdentity = measuredRelatedElementIdentity;
+            if (nextIdentity == firstIdentity) {
+                return null;
+            }
+            currentIdentity = nextIdentity;
+        }
+        return null;
+    }
+
+    ReactNativeElement getNamedElementChild(long parentIdentity, String name) {
+        assertAccess();
+        if (name.length() == 0) {
+            return null;
+        }
+        int count = getChildElementCount(parentIdentity);
+        if (count == 0 || !readRelatedElementIdentity(
+                parentIdentity, RELATION_FIRST_ELEMENT_CHILD)) {
+            return null;
+        }
+
+        long firstIdentity = measuredRelatedElementIdentity;
+        long currentIdentity = firstIdentity;
+        for (int position = 0; position < count; position++) {
+            if (!readRelatedElementIdentity(currentIdentity, RELATION_PARENT_ELEMENT)
+                    || measuredRelatedElementIdentity != parentIdentity) {
+                return null;
+            }
+            String currentId = host.getId(currentIdentity);
+            if (name.equals(currentId)) {
+                return createElement(currentIdentity);
+            }
+            if (position + 1 == count
+                    || !readRelatedElementIdentity(
+                            currentIdentity, RELATION_NEXT_ELEMENT_SIBLING)) {
+                return null;
+            }
+            long nextIdentity = measuredRelatedElementIdentity;
+            if (nextIdentity == firstIdentity) {
+                return null;
+            }
+            currentIdentity = nextIdentity;
+        }
+        return null;
+    }
+
     private ReactNativeElement getRelatedElement(long elementIdentity, byte relationKind) {
+        return readRelatedElementIdentity(elementIdentity, relationKind)
+                ? createElement(measuredRelatedElementIdentity)
+                : null;
+    }
+
+    private boolean readRelatedElementIdentity(long elementIdentity, byte relationKind) {
         boolean available = false;
-        long relatedIdentity = 0L;
         beginRead(READ_RELATION, elementIdentity);
         try {
             switch (relationKind) {
@@ -353,12 +428,9 @@ public final class NativeElementContext
                     throw new AssertionError("Unknown native element relation kind");
             }
             validateReadResult(available);
-            if (available) {
-                relatedIdentity = measuredRelatedElementIdentity;
-            }
+            return available;
         } finally {
             endRead();
         }
-        return available ? createElement(relatedIdentity) : null;
     }
 }
