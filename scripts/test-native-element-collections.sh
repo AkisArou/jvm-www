@@ -141,7 +141,7 @@ collection_read_section="$(
     <<<"$context_code"
 )"
 for required in \
-  'NativeElementContext.getChildElementCount' \
+  'getChildElementCount' \
   'NativeElementHost.readFirstElementChild' \
   'NativeElementHost.readParentElement' \
   'NativeElementHost.readNextElementSibling' \
