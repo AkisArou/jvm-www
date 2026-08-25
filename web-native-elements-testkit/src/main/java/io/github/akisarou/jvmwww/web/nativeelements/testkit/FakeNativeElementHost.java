@@ -3,6 +3,7 @@ package io.github.akisarou.jvmwww.web.nativeelements.testkit;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementHost;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementOffsetSink;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink;
+import io.github.akisarou.jvmwww.web.nativeelements.NativeElementRelationSink;
 import io.github.akisarou.jvmwww.web.nativeelements.ReactNativeElement;
 import java.util.Objects;
 
@@ -30,6 +31,17 @@ final class FakeNativeElementHost implements NativeElementHost {
     long offsetParentIdentity;
     double offsetTop;
     double offsetLeft;
+    boolean parentElementAvailable;
+    long parentElementIdentity;
+    boolean firstElementChildAvailable;
+    long firstElementChildIdentity;
+    boolean lastElementChildAvailable;
+    long lastElementChildIdentity;
+    boolean previousElementSiblingAvailable;
+    long previousElementSiblingIdentity;
+    boolean nextElementSiblingAvailable;
+    long nextElementSiblingIdentity;
+    int childElementCount;
     boolean metricsAvailable;
     double clientWidth;
     double clientHeight;
@@ -44,10 +56,13 @@ final class FakeNativeElementHost implements NativeElementHost {
     int calls;
     int mode;
     int offsetMode;
+    int relationMode;
     boolean retain;
     boolean retainOffset;
+    boolean retainRelation;
     NativeElementRectSink retained;
     NativeElementOffsetSink retainedOffset;
+    NativeElementRelationSink retainedRelation;
     ReactNativeElement reentrant;
 
     private long[] publicIdentities = new long[4];
@@ -156,6 +171,39 @@ final class FakeNativeElementHost implements NativeElementHost {
         return offsetMode != FALSE_WRITE && offsetAvailable;
     }
 
+    @Override
+    public boolean readParentElement(long value, NativeElementRelationSink sink) {
+        return relation(value, sink, parentElementAvailable, parentElementIdentity);
+    }
+
+    @Override
+    public boolean readFirstElementChild(long value, NativeElementRelationSink sink) {
+        return relation(value, sink, firstElementChildAvailable, firstElementChildIdentity);
+    }
+
+    @Override
+    public boolean readLastElementChild(long value, NativeElementRelationSink sink) {
+        return relation(value, sink, lastElementChildAvailable, lastElementChildIdentity);
+    }
+
+    @Override
+    public boolean readPreviousElementSibling(long value, NativeElementRelationSink sink) {
+        return relation(
+                value, sink, previousElementSiblingAvailable, previousElementSiblingIdentity);
+    }
+
+    @Override
+    public boolean readNextElementSibling(long value, NativeElementRelationSink sink) {
+        return relation(value, sink, nextElementSiblingAvailable, nextElementSiblingIdentity);
+    }
+
+    @Override
+    public int getChildElementCount(long value) {
+        calls++;
+        identity = value;
+        return childElementCount;
+    }
+
     @Override public double getClientWidth(long value) { return metric(value, clientWidth); }
     @Override public double getClientHeight(long value) { return metric(value, clientHeight); }
     @Override public double getClientTop(long value) { return metric(value, clientTop); }
@@ -164,6 +212,27 @@ final class FakeNativeElementHost implements NativeElementHost {
     @Override public double getScrollTop(long value) { return metric(value, scrollTop); }
     @Override public double getScrollWidth(long value) { return metric(value, scrollWidth); }
     @Override public double getScrollHeight(long value) { return metric(value, scrollHeight); }
+
+    private boolean relation(
+            long value,
+            NativeElementRelationSink sink,
+            boolean relationAvailable,
+            long relatedIdentity) {
+        calls++;
+        identity = value;
+        if (retainRelation) retainedRelation = sink;
+        if (relationMode == THROW) throw new Marker();
+        if (relationMode == NO_WRITE) return true;
+        if (relationMode == REENTER) {
+            reentrant.getBoundingClientRect();
+            throw new AssertionError("reentrant call returned");
+        }
+        if (relationMode == FALSE_WRITE || relationMode == TWICE || relationAvailable) {
+            sink.setRelatedElement(relatedIdentity);
+        }
+        if (relationMode == TWICE) sink.setRelatedElement(relatedIdentity + 1L);
+        return relationMode != FALSE_WRITE && relationAvailable;
+    }
 
     private double metric(long value, double metricValue) {
         calls++;

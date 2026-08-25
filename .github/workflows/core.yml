@@ -32,6 +32,7 @@ jobs:
       - run: ./scripts/test-geometry-matrix.sh
       - run: ./scripts/test-native-elements.sh
       - run: ./scripts/test-native-elements-android.sh
+      - run: ./scripts/test-native-element-relations.sh
       - run: ./scripts/test-websocket.sh
       - run: ./scripts/test-websocket-okhttp.sh
       - run: ./scripts/test-runtime-owned-transports.sh

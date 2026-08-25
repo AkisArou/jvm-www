@@ -7,8 +7,8 @@ import io.github.akisarou.jvmwww.web.geometry.DOMRect;
  * Read-only renderer-owned element value for the selected React Native element-node profile.
  *
  * <p>The renderer creates and caches wrappers through {@link NativeElementContext}. Tree mutation,
- * Android view access, asynchronous legacy measurement, focus, pointer capture, and document
- * traversal are separate capability slices.</p>
+ * node-level traversal, child collections, Android view access, asynchronous legacy measurement,
+ * focus, pointer capture, and document traversal are separate capability slices.</p>
  */
 public final class ReactNativeElement {
     public static final int ELEMENT_NODE = 1;
@@ -49,6 +49,36 @@ public final class ReactNativeElement {
     public String getNodeValue() {
         context.assertAccess();
         return null;
+    }
+
+    /** Returns the stable public wrapper for the current parent element. */
+    public ReactNativeElement getParentElement() {
+        return context.getParentElement(elementIdentity);
+    }
+
+    /** Returns the stable public wrapper for the first current element child. */
+    public ReactNativeElement getFirstElementChild() {
+        return context.getFirstElementChild(elementIdentity);
+    }
+
+    /** Returns the stable public wrapper for the last current element child. */
+    public ReactNativeElement getLastElementChild() {
+        return context.getLastElementChild(elementIdentity);
+    }
+
+    /** Returns the stable public wrapper for the previous current element sibling. */
+    public ReactNativeElement getPreviousElementSibling() {
+        return context.getPreviousElementSibling(elementIdentity);
+    }
+
+    /** Returns the stable public wrapper for the next current element sibling. */
+    public ReactNativeElement getNextElementSibling() {
+        return context.getNextElementSibling(elementIdentity);
+    }
+
+    /** Returns the current number of element children in the renderer snapshot. */
+    public int getChildElementCount() {
+        return context.getChildElementCount(elementIdentity);
     }
 
     /** Returns one static transformed border-box snapshot. */

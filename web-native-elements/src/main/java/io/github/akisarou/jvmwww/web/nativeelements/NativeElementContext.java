@@ -8,15 +8,22 @@ import java.util.Objects;
  * Shared owner-confined renderer context and reusable primitive measurement sinks.
  *
  * <p>One context is retained by every element wrapper belonging to a renderer/runtime pair. The
- * context itself is reused as the host's rectangle and offset sink, avoiding a callback or tuple
- * allocation for each multi-value layout read. Scalar client and scroll properties delegate
- * directly through the primitive identity and allocate nothing.</p>
+ * context itself is reused as the host's rectangle, offset, and element-relation sink, avoiding a
+ * callback or tuple allocation for each multi-value read. Scalar client, scroll, and child-count
+ * properties delegate directly through the primitive identity and allocate nothing.</p>
  */
 public final class NativeElementContext
-        implements NativeElementRectSink, NativeElementOffsetSink {
+        implements NativeElementRectSink, NativeElementOffsetSink, NativeElementRelationSink {
     private static final byte READ_NONE = 0;
     private static final byte READ_RECT = 1;
     private static final byte READ_OFFSET = 2;
+    private static final byte READ_RELATION = 3;
+
+    private static final byte RELATION_PARENT_ELEMENT = 0;
+    private static final byte RELATION_FIRST_ELEMENT_CHILD = 1;
+    private static final byte RELATION_LAST_ELEMENT_CHILD = 2;
+    private static final byte RELATION_PREVIOUS_ELEMENT_SIBLING = 3;
+    private static final byte RELATION_NEXT_ELEMENT_SIBLING = 4;
 
     private final RuntimeInstance runtime;
     private final NativeElementHost host;
@@ -29,6 +36,8 @@ public final class NativeElementContext
     private double measuredOffsetTop;
     private double measuredOffsetLeft;
     private boolean measuredHasOffsetParent;
+    private long measuredRelatedElementIdentity;
+    private long activeElementIdentity;
     private byte activeReadKind;
     private boolean readWritten;
 
@@ -93,6 +102,23 @@ public final class NativeElementContext
         measuredOffsetParentIdentity = hasOffsetParent ? offsetParentIdentity : 0L;
         measuredOffsetTop = top;
         measuredOffsetLeft = left;
+        readWritten = true;
+    }
+
+    @Override
+    public void setRelatedElement(long elementIdentity) {
+        if (activeReadKind != READ_RELATION) {
+            throw new IllegalStateException(
+                    "NativeElementRelationSink used outside an element-relation read");
+        }
+        if (readWritten) {
+            throw new IllegalStateException("NativeElementHost wrote more than one read result");
+        }
+        if (elementIdentity == activeElementIdentity) {
+            throw new IllegalStateException(
+                    "NativeElementHost returned the element as its own relative");
+        }
+        measuredRelatedElementIdentity = elementIdentity;
         readWritten = true;
     }
 
@@ -188,7 +214,7 @@ public final class NativeElementContext
     }
 
     private boolean measureRect(long elementIdentity, boolean includeTransform) {
-        beginRead(READ_RECT);
+        beginRead(READ_RECT, elementIdentity);
         try {
             boolean available = host.measureBoundingClientRect(
                     elementIdentity,
@@ -208,7 +234,7 @@ public final class NativeElementContext
     }
 
     private boolean measureOffset(long elementIdentity) {
-        beginRead(READ_OFFSET);
+        beginRead(READ_OFFSET, elementIdentity);
         try {
             boolean available = host.measureOffset(elementIdentity, this);
             validateReadResult(available);
@@ -224,11 +250,12 @@ public final class NativeElementContext
         }
     }
 
-    private void beginRead(byte readKind) {
+    private void beginRead(byte readKind, long elementIdentity) {
         assertAccess();
         if (activeReadKind != READ_NONE) {
             throw new IllegalStateException("NativeElementHost re-entered element measurement");
         }
+        activeElementIdentity = elementIdentity;
         activeReadKind = readKind;
         readWritten = false;
     }
@@ -244,6 +271,7 @@ public final class NativeElementContext
 
     private void endRead() {
         activeReadKind = READ_NONE;
+        activeElementIdentity = 0L;
         readWritten = false;
     }
 
@@ -268,5 +296,69 @@ public final class NativeElementContext
         }
         double floor = Math.floor(value);
         return value - floor < 0.5 ? floor : floor + 1.0;
+    }
+
+    ReactNativeElement getParentElement(long elementIdentity) {
+        return getRelatedElement(elementIdentity, RELATION_PARENT_ELEMENT);
+    }
+
+    ReactNativeElement getFirstElementChild(long elementIdentity) {
+        return getRelatedElement(elementIdentity, RELATION_FIRST_ELEMENT_CHILD);
+    }
+
+    ReactNativeElement getLastElementChild(long elementIdentity) {
+        return getRelatedElement(elementIdentity, RELATION_LAST_ELEMENT_CHILD);
+    }
+
+    ReactNativeElement getPreviousElementSibling(long elementIdentity) {
+        return getRelatedElement(elementIdentity, RELATION_PREVIOUS_ELEMENT_SIBLING);
+    }
+
+    ReactNativeElement getNextElementSibling(long elementIdentity) {
+        return getRelatedElement(elementIdentity, RELATION_NEXT_ELEMENT_SIBLING);
+    }
+
+    int getChildElementCount(long elementIdentity) {
+        assertAccess();
+        int count = host.getChildElementCount(elementIdentity);
+        if (count < 0) {
+            throw new IllegalStateException(
+                    "NativeElementHost returned a negative childElementCount");
+        }
+        return count;
+    }
+
+    private ReactNativeElement getRelatedElement(long elementIdentity, byte relationKind) {
+        boolean available = false;
+        long relatedIdentity = 0L;
+        beginRead(READ_RELATION, elementIdentity);
+        try {
+            switch (relationKind) {
+                case RELATION_PARENT_ELEMENT:
+                    available = host.readParentElement(elementIdentity, this);
+                    break;
+                case RELATION_FIRST_ELEMENT_CHILD:
+                    available = host.readFirstElementChild(elementIdentity, this);
+                    break;
+                case RELATION_LAST_ELEMENT_CHILD:
+                    available = host.readLastElementChild(elementIdentity, this);
+                    break;
+                case RELATION_PREVIOUS_ELEMENT_SIBLING:
+                    available = host.readPreviousElementSibling(elementIdentity, this);
+                    break;
+                case RELATION_NEXT_ELEMENT_SIBLING:
+                    available = host.readNextElementSibling(elementIdentity, this);
+                    break;
+                default:
+                    throw new AssertionError("Unknown native element relation kind");
+            }
+            validateReadResult(available);
+            if (available) {
+                relatedIdentity = measuredRelatedElementIdentity;
+            }
+        } finally {
+            endRead();
+        }
+        return available ? createElement(relatedIdentity) : null;
     }
 }

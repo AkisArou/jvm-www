@@ -4,9 +4,11 @@ import android.os.Looper;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementHost;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementOffsetSink;
 import io.github.akisarou.jvmwww.web.nativeelements.NativeElementRectSink;
+import io.github.akisarou.jvmwww.web.nativeelements.NativeElementRelationSink;
 import io.github.akisarou.jvmwww.web.nativeelements.ReactNativeElement;
 import java.util.Objects;
 
+/** Looper-confined committed primitive state for reached React Native element reads. */
 public final class AndroidNativeElementHost implements NativeElementHost, AutoCloseable {
     private static final int INITIAL_CAPACITY = 16;
     private static final int SLOT_BITS = 20;
@@ -18,6 +20,7 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     private static final byte STATE_HAS_LAYOUT = 2;
     private static final byte STATE_HAS_CLIENT_AND_SCROLL = 4;
     private static final byte STATE_HAS_OFFSET = 8;
+    private static final byte STATE_HAS_ELEMENT_RELATIONS = 16;
 
     private static final int METADATA_STRIDE = 2;
     private static final int TAG_NAME_OFFSET = 0;
@@ -43,10 +46,19 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     private static final int OFFSET_TOP = 16;
     private static final int OFFSET_LEFT = 17;
 
+    private static final int RELATION_STRIDE = 5;
+    private static final int PARENT_ELEMENT = 0;
+    private static final int FIRST_ELEMENT_CHILD = 1;
+    private static final int LAST_ELEMENT_CHILD = 2;
+    private static final int PREVIOUS_ELEMENT_SIBLING = 3;
+    private static final int NEXT_ELEMENT_SIBLING = 4;
+
     private final Looper looper;
 
     private long[] generations;
     private long[] offsetParents;
+    private long[] elementRelations;
+    private int[] childElementCounts;
     private int[] nextFreeSlot;
     private byte[] states;
     private String[] metadata;
@@ -148,6 +160,64 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
+    /**
+     * Publishes the current element-only parent, child endpoint, sibling, and count snapshot.
+     *
+     * <p>Zero is an adapter-private absence/root sentinel. Every nonzero relation must be a distinct
+     * still-mounted identity. A zero child count requires absent first and last children; one child
+     * requires identical first and last identities; larger counts require distinct endpoints.</p>
+     */
+    public boolean commitElementRelations(
+            long elementIdentity,
+            long parentElementIdentity,
+            long firstElementChildIdentity,
+            long lastElementChildIdentity,
+            long previousElementSiblingIdentity,
+            long nextElementSiblingIdentity,
+            int childElementCount) {
+        assertMutationAllowed();
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0
+                || childElementCount < 0
+                || childElementCount >= activeCount
+                || !isDistinctActiveRelation(slot, parentElementIdentity)
+                || !isDistinctActiveRelation(slot, firstElementChildIdentity)
+                || !isDistinctActiveRelation(slot, lastElementChildIdentity)
+                || !isDistinctActiveRelation(slot, previousElementSiblingIdentity)
+                || !isDistinctActiveRelation(slot, nextElementSiblingIdentity)) {
+            return false;
+        }
+        if (childElementCount == 0) {
+            if (firstElementChildIdentity != 0L || lastElementChildIdentity != 0L) {
+                return false;
+            }
+        } else {
+            if (firstElementChildIdentity == 0L || lastElementChildIdentity == 0L) {
+                return false;
+            }
+            if (childElementCount == 1
+                    ? firstElementChildIdentity != lastElementChildIdentity
+                    : firstElementChildIdentity == lastElementChildIdentity) {
+                return false;
+            }
+        }
+        if (previousElementSiblingIdentity != 0L
+                && previousElementSiblingIdentity == nextElementSiblingIdentity) {
+            return false;
+        }
+
+        int relationIndex = slot * RELATION_STRIDE;
+        elementRelations[relationIndex + PARENT_ELEMENT] = parentElementIdentity;
+        elementRelations[relationIndex + FIRST_ELEMENT_CHILD] = firstElementChildIdentity;
+        elementRelations[relationIndex + LAST_ELEMENT_CHILD] = lastElementChildIdentity;
+        elementRelations[relationIndex + PREVIOUS_ELEMENT_SIBLING] =
+                previousElementSiblingIdentity;
+        elementRelations[relationIndex + NEXT_ELEMENT_SIBLING] = nextElementSiblingIdentity;
+        childElementCounts[slot] = childElementCount;
+        states[slot] = (byte) (states[slot] | STATE_HAS_ELEMENT_RELATIONS);
+        return true;
+    }
+
     public boolean commitClientAndScrollMetrics(
             long elementIdentity,
             double clientWidth,
@@ -197,6 +267,17 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return true;
     }
 
+    public boolean clearCommittedElementRelations(long elementIdentity) {
+        assertMutationAllowed();
+        int slot = resolveActiveSlot(elementIdentity);
+        if (slot < 0) {
+            return false;
+        }
+        states[slot] = (byte) (states[slot] & ~STATE_HAS_ELEMENT_RELATIONS);
+        clearElementRelations(slot);
+        return true;
+    }
+
     public boolean clearCommittedClientAndScrollMetrics(long elementIdentity) {
         assertMutationAllowed();
         int slot = resolveActiveSlot(elementIdentity);
@@ -216,6 +297,7 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
 
         states[slot] = 0;
         offsetParents[slot] = 0L;
+        clearElementRelations(slot);
         int metadataIndex = slot * METADATA_STRIDE;
         metadata[metadataIndex + TAG_NAME_OFFSET] = null;
         metadata[metadataIndex + ID_OFFSET] = null;
@@ -326,6 +408,51 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
     }
 
     @Override
+    public boolean readParentElement(long elementIdentity, NativeElementRelationSink sink) {
+        return readElementRelation(elementIdentity, PARENT_ELEMENT, sink);
+    }
+
+    @Override
+    public boolean readFirstElementChild(long elementIdentity, NativeElementRelationSink sink) {
+        return readElementRelation(elementIdentity, FIRST_ELEMENT_CHILD, sink);
+    }
+
+    @Override
+    public boolean readLastElementChild(long elementIdentity, NativeElementRelationSink sink) {
+        return readElementRelation(elementIdentity, LAST_ELEMENT_CHILD, sink);
+    }
+
+    @Override
+    public boolean readPreviousElementSibling(
+            long elementIdentity, NativeElementRelationSink sink) {
+        return readElementRelation(elementIdentity, PREVIOUS_ELEMENT_SIBLING, sink);
+    }
+
+    @Override
+    public boolean readNextElementSibling(long elementIdentity, NativeElementRelationSink sink) {
+        return readElementRelation(elementIdentity, NEXT_ELEMENT_SIBLING, sink);
+    }
+
+    @Override
+    public int getChildElementCount(long elementIdentity) {
+        assertOwnerThread();
+        int slot = closed ? -1 : resolveActiveSlot(elementIdentity);
+        if (slot < 0 || (states[slot] & STATE_HAS_ELEMENT_RELATIONS) == 0) {
+            return 0;
+        }
+        int count = childElementCounts[slot];
+        if (count == 0) {
+            return 0;
+        }
+        int relationIndex = slot * RELATION_STRIDE;
+        long firstIdentity = elementRelations[relationIndex + FIRST_ELEMENT_CHILD];
+        long lastIdentity = elementRelations[relationIndex + LAST_ELEMENT_CHILD];
+        return resolveActiveSlot(firstIdentity) < 0 || resolveActiveSlot(lastIdentity) < 0
+                ? 0
+                : count;
+    }
+
+    @Override
     public double getClientWidth(long elementIdentity) {
         return readClientAndScrollMetric(elementIdentity, CLIENT_WIDTH);
     }
@@ -374,6 +501,8 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         closed = true;
         generations = null;
         offsetParents = null;
+        elementRelations = null;
+        childElementCounts = null;
         nextFreeSlot = null;
         states = null;
         metadata = null;
@@ -389,6 +518,25 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         return closed;
     }
 
+    private boolean readElementRelation(
+            long elementIdentity,
+            int relationOffset,
+            NativeElementRelationSink sink) {
+        assertOwnerThread();
+        NativeElementRelationSink checkedSink = Objects.requireNonNull(sink, "sink");
+        int slot = closed ? -1 : resolveActiveSlot(elementIdentity);
+        if (slot < 0 || (states[slot] & STATE_HAS_ELEMENT_RELATIONS) == 0) {
+            return false;
+        }
+        long relatedIdentity = elementRelations[slot * RELATION_STRIDE + relationOffset];
+        int relatedSlot = resolveActiveSlot(relatedIdentity);
+        if (relatedSlot < 0 || relatedSlot == slot) {
+            return false;
+        }
+        checkedSink.setRelatedElement(relatedIdentity);
+        return true;
+    }
+
     private double readClientAndScrollMetric(long elementIdentity, int metricOffset) {
         assertOwnerThread();
         int slot = closed ? -1 : resolveActiveSlot(elementIdentity);
@@ -396,6 +544,24 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
             return 0.0;
         }
         return layout[slot * LAYOUT_STRIDE + metricOffset];
+    }
+
+    private void clearElementRelations(int slot) {
+        int relationIndex = slot * RELATION_STRIDE;
+        elementRelations[relationIndex + PARENT_ELEMENT] = 0L;
+        elementRelations[relationIndex + FIRST_ELEMENT_CHILD] = 0L;
+        elementRelations[relationIndex + LAST_ELEMENT_CHILD] = 0L;
+        elementRelations[relationIndex + PREVIOUS_ELEMENT_SIBLING] = 0L;
+        elementRelations[relationIndex + NEXT_ELEMENT_SIBLING] = 0L;
+        childElementCounts[slot] = 0;
+    }
+
+    private boolean isDistinctActiveRelation(int elementSlot, long relatedIdentity) {
+        if (relatedIdentity == 0L) {
+            return true;
+        }
+        int relatedSlot = resolveActiveSlot(relatedIdentity);
+        return relatedSlot >= 0 && relatedSlot != elementSlot;
     }
 
     private int allocateSlot() {
@@ -431,6 +597,8 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
 
         long[] newGenerations = new long[newCapacity];
         long[] newOffsetParents = new long[newCapacity];
+        long[] newElementRelations = new long[newCapacity * RELATION_STRIDE];
+        int[] newChildElementCounts = new int[newCapacity];
         int[] newNextFreeSlot = new int[newCapacity];
         byte[] newStates = new byte[newCapacity];
         String[] newMetadata = new String[newCapacity * METADATA_STRIDE];
@@ -439,6 +607,14 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         if (currentCapacity != 0) {
             System.arraycopy(generations, 0, newGenerations, 0, currentCapacity);
             System.arraycopy(offsetParents, 0, newOffsetParents, 0, currentCapacity);
+            System.arraycopy(
+                    elementRelations,
+                    0,
+                    newElementRelations,
+                    0,
+                    currentCapacity * RELATION_STRIDE);
+            System.arraycopy(
+                    childElementCounts, 0, newChildElementCounts, 0, currentCapacity);
             System.arraycopy(nextFreeSlot, 0, newNextFreeSlot, 0, currentCapacity);
             System.arraycopy(states, 0, newStates, 0, currentCapacity);
             System.arraycopy(metadata, 0, newMetadata, 0, currentCapacity * METADATA_STRIDE);
@@ -447,6 +623,8 @@ public final class AndroidNativeElementHost implements NativeElementHost, AutoCl
         }
         generations = newGenerations;
         offsetParents = newOffsetParents;
+        elementRelations = newElementRelations;
+        childElementCounts = newChildElementCounts;
         nextFreeSlot = newNextFreeSlot;
         states = newStates;
         metadata = newMetadata;
